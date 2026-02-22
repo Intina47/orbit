@@ -11,3 +11,4 @@ memory.db
 .env
 .venv/
 docs/_build/
+tmp/

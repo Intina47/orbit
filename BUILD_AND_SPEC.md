@@ -686,3 +686,45 @@ Completed:
   - architecture and integration discovery terms
 - Added repository pointer:
   - `README.md` now references `metaData.md`.
+
+### 2026-02-22 - OpenClaw Integration Resume (Compile + Tests + Identity Stitching)
+
+Completed:
+- Resolved strict TypeScript compile blockers in OpenClaw plugin:
+  - fixed `exactOptionalPropertyTypes` load-config call path in:
+    - `integrations/openclaw-memory/src/index.ts`
+  - fixed strict indexing nullability in:
+    - `integrations/openclaw-memory/src/identity.ts`
+- Strengthened entity identity resolution:
+  - `sessionKey`-first resolution with fallback behavior controls
+  - alias collapsing via `identityLinks`
+  - channel-aware prefixed fallback IDs
+  - implemented in:
+    - `integrations/openclaw-memory/src/identity.ts`
+    - `integrations/openclaw-memory/src/config.ts`
+    - `integrations/openclaw-memory/src/index.ts`
+    - `integrations/openclaw-memory/openclaw.plugin.json`
+- Added mocked test suite (Vitest):
+  - `integrations/openclaw-memory/src/__tests__/identity.test.ts`
+  - `integrations/openclaw-memory/src/__tests__/config.test.ts`
+  - `integrations/openclaw-memory/src/__tests__/plugin.test.ts`
+  - coverage includes:
+    - identity stitching behavior
+    - config merge behavior (runtime/env/plugin)
+    - hook lifecycle (`before_agent_start` + `agent_end`) with mocked Orbit API
+    - command registration and status path
+- Updated integration docs:
+  - `integrations/openclaw-memory/README.md`
+- npm packaging hardening:
+  - made `openclaw` peer optional via `peerDependenciesMeta` in:
+    - `integrations/openclaw-memory/package.json`
+  - regenerated lockfile with optional-peer behavior:
+    - `integrations/openclaw-memory/package-lock.json`
+  - removed previous peer-induced lockfile bloat and audit noise
+
+Validation:
+- `cd integrations/openclaw-memory && npm run typecheck`: PASS
+- `cd integrations/openclaw-memory && npm run test`: PASS (3 files, 8 tests)
+- `cd integrations/openclaw-memory && npm run build`: PASS
+- `cd integrations/openclaw-memory && npm run validate`: PASS
+- `cd integrations/openclaw-memory && npm install`: PASS (0 vulnerabilities)

@@ -157,7 +157,11 @@ export function resolveEntityId(input: ResolveEntityIdInput): string {
   }
 
   if (candidateIds.length > 0) {
-    const primaryId = sanitizeSegment(candidateIds[0]);
+    const firstCandidate = candidateIds[0];
+    if (!firstCandidate) {
+      return `${safePrefix}:anonymous`;
+    }
+    const primaryId = sanitizeSegment(firstCandidate);
     if (channel && !primaryId.includes(":")) {
       return `${safePrefix}:${sanitizeSegment(channel)}:${primaryId}`;
     }

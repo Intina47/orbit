@@ -20,7 +20,10 @@ export type HookCallback =
 export interface OpenClawCommandDefinition {
   name: string;
   description?: string;
-  execute: (args: string, context?: HookContext) => Promise<string> | string;
+  acceptsArgs?: boolean;
+  requireAuth?: boolean;
+  execute?: (args: string, context?: HookContext) => Promise<string> | string;
+  handler?: (context: HookContext) => Promise<string> | string;
 }
 
 export interface OpenClawToolDefinition {

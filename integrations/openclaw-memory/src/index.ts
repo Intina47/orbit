@@ -14,6 +14,7 @@ import type {
   OpenClawToolRegistrationOptions,
   JsonObject,
 } from "./types.js";
+import type { LoadConfigOptions } from "./config.js";
 
 const CONTEXT_MARKER = "Orbit memory context (already ranked):";
 
@@ -127,8 +128,86 @@ function getFirstText(
   return null;
 }
 
+function asObject(value: unknown): JsonObject | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value as JsonObject;
+}
+
+function extractTextFromMessage(message: unknown): string | null {
+  const record = asObject(message);
+  if (!record) {
+    return null;
+  }
+
+  const directContent = record.content;
+  if (typeof directContent === "string" && directContent.trim().length > 0) {
+    return directContent.trim();
+  }
+
+  if (Array.isArray(directContent)) {
+    const chunks: string[] = [];
+    for (const part of directContent) {
+      if (typeof part === "string" && part.trim().length > 0) {
+        chunks.push(part.trim());
+        continue;
+      }
+      const partRecord = asObject(part);
+      if (!partRecord) {
+        continue;
+      }
+      const textValue = partRecord.text ?? partRecord.value ?? partRecord.content;
+      if (typeof textValue === "string" && textValue.trim().length > 0) {
+        chunks.push(textValue.trim());
+      }
+    }
+    if (chunks.length > 0) {
+      return chunks.join("\n").trim();
+    }
+  }
+
+  const text = record.text;
+  if (typeof text === "string" && text.trim().length > 0) {
+    return text.trim();
+  }
+
+  const messageText = record.message;
+  if (typeof messageText === "string" && messageText.trim().length > 0) {
+    return messageText.trim();
+  }
+
+  return null;
+}
+
+function findMessageTextByRole(event: HookEvent, role: "user" | "assistant"): string | null {
+  const record = asObject(event);
+  if (!record) {
+    return null;
+  }
+  const messages = record.messages;
+  if (!Array.isArray(messages)) {
+    return null;
+  }
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = asObject(messages[index]);
+    if (!message) {
+      continue;
+    }
+    const messageRole = message.role;
+    if (typeof messageRole === "string" && messageRole.toLowerCase() !== role) {
+      continue;
+    }
+    const text = extractTextFromMessage(message);
+    if (text) {
+      return text;
+    }
+  }
+  return null;
+}
+
 function extractInput(event: HookEvent, context: HookContext): string | null {
-  return getFirstText([event, context], [
+  const direct = getFirstText([event, context], [
     ["input"],
     ["prompt"],
     ["message"],
@@ -137,10 +216,14 @@ function extractInput(event: HookEvent, context: HookContext): string | null {
     ["data", "prompt"],
     ["data", "message"],
   ]);
+  if (direct) {
+    return direct;
+  }
+  return findMessageTextByRole(event, "user");
 }
 
 function extractOutput(event: HookEvent, context: HookContext): string | null {
-  return getFirstText([event, context], [
+  const direct = getFirstText([event, context], [
     ["result", "output_text"],
     ["result", "output"],
     ["result", "content"],
@@ -150,6 +233,10 @@ function extractOutput(event: HookEvent, context: HookContext): string | null {
     ["data", "result", "content"],
     ["data", "output"],
   ]);
+  if (direct) {
+    return direct;
+  }
+  return findMessageTextByRole(event, "assistant");
 }
 
 function stripInjectedMemoryContext(value: string): string {
@@ -244,10 +331,27 @@ function registerCommand(
   if (!api.registerCommand) {
     return;
   }
+  const execute = definition.execute;
+  if (!execute) {
+    log(api, "warn", `[orbit] command '${definition.name}' missing execute handler.`);
+    return;
+  }
   try {
-    api.registerCommand(definition);
+    api.registerCommand({
+      name: definition.name,
+      description: definition.description ?? definition.name,
+      acceptsArgs: true,
+      requireAuth: true,
+      handler: async (rawContext: unknown) => {
+        const context = asObject(rawContext) ?? {};
+        const argsValue = context.args;
+        const args = typeof argsValue === "string" ? argsValue : "";
+        return execute(args, context as HookContext);
+      },
+    });
+    return;
   } catch {
-    api.registerCommand(definition.name, definition.execute);
+    api.registerCommand(definition.name, execute);
   }
 }
 
@@ -278,12 +382,16 @@ function buildRetrieveQuery(input: string): string {
   return compact.length <= max ? compact : compact.slice(0, max);
 }
 
-async function registerPlugin(api: OpenClawPluginApi): Promise<void> {
-  const config = loadConfig({
-    env: process.env,
-    pluginConfig: api.pluginConfig,
-    runtimeConfig: api.config,
-  });
+function registerPlugin(api: OpenClawPluginApi): void {
+  const loadOptions: LoadConfigOptions = { env: process.env };
+  if (api.pluginConfig && typeof api.pluginConfig === "object") {
+    loadOptions.pluginConfig = api.pluginConfig;
+  }
+  if (api.config && typeof api.config === "object") {
+    loadOptions.runtimeConfig = api.config;
+  }
+
+  const config = loadConfig(loadOptions);
   const client = new OrbitClient(config, (...args: unknown[]) => log(api, "info", ...args));
 
   log(
@@ -430,7 +538,7 @@ async function registerPlugin(api: OpenClawPluginApi): Promise<void> {
 }
 
 const plugin: OpenClawPlugin = {
-  id: "orbit.memory",
+  id: "openclaw-memory",
   kind: "memory",
   name: "@orbit/openclaw-memory",
   version: DEFAULT_VERSION,

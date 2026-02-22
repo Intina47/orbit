@@ -1,6 +1,6 @@
 {
   "name": "@orbit/openclaw-memory",
-  "id": "orbit.memory",
+  "id": "openclaw-memory",
   "kind": "memory",
   "displayName": "Orbit Memory",
   "description": "Injects personalized context into OpenClaw agents using Orbit ingest, retrieve, and feedback APIs.",
