@@ -1,0 +1,11 @@
+{
+  "generated_at": "2026-02-22T17:58:32.964402+00:00",
+  "metrics": {
+    "events_received": 120.0,
+    "events_stored": 120.0,
+    "events_discarded": 0.0,
+    "compression_events": 0.0,
+    "feedback_events": 0.0
+  },
+  "storage_ratio": 1.0
+}

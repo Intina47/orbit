@@ -1,0 +1,17 @@
+[MAIN]
+py-version = 3.11
+
+[MESSAGES CONTROL]
+disable =
+    missing-module-docstring,
+    missing-class-docstring,
+    missing-function-docstring,
+    too-few-public-methods,
+    too-many-instance-attributes,
+    too-many-arguments,
+    too-many-positional-arguments,
+    duplicate-code,
+    line-too-long
+
+[REPORTS]
+score = yes

@@ -1,0 +1,86 @@
+[project]
+name = "orbit-memory"
+version = "0.1.0"
+description = "Intelligent-first memory decision engine for developers"
+readme = "BUILD_AND_SPEC.md"
+requires-python = ">=3.11,<4.0"
+authors = [{ name = "Memory Infrastructure Team" }]
+dependencies = [
+  "alembic>=1.14,<2.0",
+  "fastapi>=0.115,<1.0",
+  "httpx>=0.28,<1.0",
+  "numpy>=1.26,<2.0",
+  "openai>=1.61,<2.0",
+  "opentelemetry-api>=1.31,<2.0",
+  "opentelemetry-exporter-otlp>=1.31,<2.0",
+  "opentelemetry-instrumentation-fastapi>=0.52b0,<1.0",
+  "opentelemetry-instrumentation-httpx>=0.52b0,<1.0",
+  "opentelemetry-sdk>=1.31,<2.0",
+  "prometheus-client>=0.21,<1.0",
+  "psycopg[binary]>=3.2,<4.0",
+  "PyJWT>=2.10,<3.0",
+  "pydantic>=2.11,<3.0",
+  "slowapi>=0.1.9,<1.0",
+  "sqlalchemy>=2.0,<3.0",
+  "structlog>=25.5,<26.0",
+  "torch>=2.6,<3.0",
+  "uvicorn>=0.35,<1.0",
+]
+
+[dependency-groups]
+dev = [
+  "black>=25.1,<26.0",
+  "isort>=5.13,<6.0",
+  "mypy>=1.14,<2.0",
+  "pylint>=4.0,<5.0",
+  "pytest>=8.3,<9.0",
+  "pytest-asyncio>=1.1,<2.0",
+  "pytest-benchmark>=5.1,<6.0",
+  "pytest-cov>=6.0,<7.0",
+  "ruff>=0.9,<1.0",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.39,<1.0"]
+gemini = ["google-genai>=1.0,<2.0"]
+ollama = ["ollama>=0.3,<1.0"]
+llm-adapters = [
+  "anthropic>=0.39,<1.0",
+  "google-genai>=1.0,<2.0",
+  "ollama>=0.3,<1.0",
+]
+
+[tool.poetry]
+packages = [
+  { include = "decision_engine", from = "src" },
+  { include = "memory_engine", from = "src" },
+  { include = "orbit", from = "src" },
+  { include = "orbit_api", from = "src" },
+]
+
+[tool.pytest.ini_options]
+minversion = "7.4"
+addopts = "-q"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+warn_return_any = true
+show_error_codes = true
+mypy_path = "src"
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM"]
+ignore = ["E501", "UP042"]
+
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"

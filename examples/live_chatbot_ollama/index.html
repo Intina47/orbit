@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Orbit Live Tutor Console</title>
+  <style>
+    :root {
+      --ink: #102133;
+      --muted: #5c6a74;
+      --panel: rgba(255, 255, 255, 0.86);
+      --accent: #0f766e;
+      --accent-strong: #0b5f59;
+      --danger: #be123c;
+      --warn: #b45309;
+      --line: #d8e3e8;
+      --chip: #eff6f7;
+      --radius: 18px;
+      --shadow: 0 18px 36px rgba(16, 33, 51, 0.14);
+      --display: "Space Grotesk", "Avenir Next", "Trebuchet MS", sans-serif;
+      --body: "IBM Plex Sans", "Avenir", "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: var(--body);
+      color: var(--ink);
+      background:
+        radial-gradient(80rem 45rem at -10% -10%, rgba(245, 158, 11, 0.24), transparent),
+        radial-gradient(80rem 45rem at 110% 120%, rgba(6, 182, 212, 0.18), transparent),
+        linear-gradient(145deg, #fffaf1 0%, #eefafc 50%, #ecf4ff 100%);
+      min-height: 100vh;
+    }
+
+    .shell {
+      width: min(1160px, 94vw);
+      margin: 28px auto;
+      display: grid;
+      gap: 16px;
+    }
+
+    .hero, .panel {
+      background: var(--panel);
+      border: 1px solid rgba(255, 255, 255, 0.7);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+      animation: rise 420ms ease both;
+    }
+
+    .hero {
+      padding: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    h1 {
+      font-family: var(--display);
+      font-size: clamp(1.25rem, 2.6vw, 1.8rem);
+      margin: 0;
+      letter-spacing: 0.02em;
+    }
+
+    .subtitle {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .chips {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .chip {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 6px 10px;
+      background: var(--chip);
+      font-size: 0.82rem;
+      color: #134e4a;
+      white-space: nowrap;
+    }
+
+    .grid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: 1.55fr 1fr;
+      align-items: start;
+    }
+
+    .panel {
+      padding: 16px;
+      animation-delay: 90ms;
+    }
+
+    .panel:nth-child(2) { animation-delay: 160ms; }
+
+    .section-title {
+      font-family: var(--display);
+      font-size: 1.05rem;
+      margin: 0 0 10px;
+    }
+
+    label {
+      font-size: 0.82rem;
+      color: var(--muted);
+      display: block;
+      margin: 0 0 6px;
+    }
+
+    input, textarea, button {
+      font: inherit;
+    }
+
+    input, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: white;
+      color: var(--ink);
+      outline: none;
+      transition: border-color 160ms ease, box-shadow 160ms ease;
+    }
+
+    input:focus, textarea:focus {
+      border-color: #20a197;
+      box-shadow: 0 0 0 3px rgba(32, 161, 151, 0.16);
+    }
+
+    .top-controls {
+      display: grid;
+      grid-template-columns: 1fr 90px;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .feed {
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.72);
+      border-radius: 14px;
+      padding: 10px;
+      min-height: 360px;
+      max-height: 460px;
+      overflow: auto;
+      display: grid;
+      gap: 10px;
+    }
+
+    .bubble {
+      padding: 10px 12px;
+      border-radius: 12px;
+      line-height: 1.4;
+      font-size: 0.95rem;
+      animation: fadeIn 260ms ease both;
+      border: 1px solid transparent;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .bubble.user {
+      margin-left: 8%;
+      background: #e5f5ff;
+      border-color: #b5d8ee;
+    }
+
+    .bubble.assistant {
+      margin-right: 8%;
+      background: #f7f8fb;
+      border-color: #e2e8f0;
+    }
+
+    .bubble.system {
+      background: #f0fdf4;
+      border-color: #b7f0ce;
+      color: #0f5132;
+      font-size: 0.88rem;
+    }
+
+    .composer {
+      margin-top: 10px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: 0;
+      border-radius: 11px;
+      padding: 10px 13px;
+      cursor: pointer;
+      transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
+    }
+
+    button:hover { transform: translateY(-1px); }
+    button:active { transform: translateY(0); }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary:hover { background: var(--accent-strong); }
+
+    .btn-ghost {
+      background: #edf6f5;
+      border: 1px solid #cae7e3;
+      color: #0f766e;
+    }
+
+    .btn-danger {
+      background: #ffe7ef;
+      border: 1px solid #f9bfd0;
+      color: #9d174d;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 0.84rem;
+      margin-top: 10px;
+      min-height: 20px;
+    }
+
+    .feedback-list {
+      margin-top: 10px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .feedback-row {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.78);
+      padding: 9px 10px;
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      align-items: center;
+      animation: fadeIn 220ms ease both;
+    }
+
+    .feedback-id {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.78rem;
+      color: #334155;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .context-form {
+      display: grid;
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    .context-result {
+      margin-top: 10px;
+      display: grid;
+      gap: 8px;
+      max-height: 430px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .memory-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 10px;
+      display: grid;
+      gap: 6px;
+      animation: fadeIn 240ms ease both;
+    }
+
+    .memory-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 0.84rem;
+      color: #0f172a;
+    }
+
+    .intent {
+      border-radius: 999px;
+      border: 1px solid #d1e9e6;
+      background: #ecfbf9;
+      color: #0f766e;
+      padding: 2px 8px;
+      font-size: 0.75rem;
+    }
+
+    .memory-summary {
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+
+    .memory-content {
+      font-size: 0.85rem;
+      color: #334155;
+      white-space: pre-wrap;
+    }
+
+    .danger-text { color: var(--danger); }
+    .warn-text { color: var(--warn); }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 980px) {
+      .grid { grid-template-columns: 1fr; }
+      .hero { flex-direction: column; align-items: flex-start; }
+      .chips { justify-content: flex-start; }
+      .feed { min-height: 300px; }
+      .feedback-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <h1>Orbit Live Tutor Console</h1>
+        <p class="subtitle">Interactive end-to-end test UI for chat, retrieval ordering, and feedback loops.</p>
+      </div>
+      <div class="chips">
+        <span class="chip">Orbit API: <code>/v1/*</code></span>
+        <span class="chip">Chatbot API: <code>/chat</code></span>
+        <span class="chip">LLM: Ollama</span>
+      </div>
+    </section>
+
+    <section class="grid">
+      <section class="panel">
+        <h2 class="section-title">Chat Playground</h2>
+        <div class="top-controls">
+          <div>
+            <label for="user-id">User ID</label>
+            <input id="user-id" value="alice" autocomplete="off">
+          </div>
+          <div>
+            <label for="context-limit">Limit</label>
+            <input id="context-limit" type="number" min="1" max="20" value="5">
+          </div>
+        </div>
+
+        <div id="feed" class="feed"></div>
+
+        <form id="chat-form" class="composer">
+          <div>
+            <label for="message">Message</label>
+            <textarea id="message" rows="4" placeholder="Ask the coding tutor a question..."></textarea>
+          </div>
+          <div class="actions">
+            <button id="send-btn" type="submit" class="btn-primary">Send Message</button>
+            <button id="clear-btn" type="button" class="btn-ghost">Clear Feed</button>
+          </div>
+        </form>
+
+        <div id="chat-meta" class="meta">Ready.</div>
+        <div id="feedback-list" class="feedback-list"></div>
+      </section>
+
+      <section class="panel">
+        <h2 class="section-title">Orbit Context Inspector</h2>
+        <form id="context-form" class="context-form">
+          <div>
+            <label for="context-query">Inspection Query</label>
+            <textarea id="context-query" rows="3" placeholder="What should I know about alice to teach Python effectively?"></textarea>
+          </div>
+          <button id="inspect-btn" type="submit" class="btn-primary">Inspect Retrieval Ordering</button>
+        </form>
+        <div id="context-meta" class="meta"></div>
+        <div id="context-result" class="context-result"></div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const feedEl = document.getElementById("feed");
+    const chatFormEl = document.getElementById("chat-form");
+    const messageEl = document.getElementById("message");
+    const userIdEl = document.getElementById("user-id");
+    const limitEl = document.getElementById("context-limit");
+    const chatMetaEl = document.getElementById("chat-meta");
+    const feedbackListEl = document.getElementById("feedback-list");
+    const clearBtnEl = document.getElementById("clear-btn");
+    const contextFormEl = document.getElementById("context-form");
+    const contextQueryEl = document.getElementById("context-query");
+    const contextMetaEl = document.getElementById("context-meta");
+    const contextResultEl = document.getElementById("context-result");
+    const sendBtnEl = document.getElementById("send-btn");
+    const inspectBtnEl = document.getElementById("inspect-btn");
+
+    function shortId(value) {
+      if (value.length < 14) return value;
+      return value.slice(0, 8) + "..." + value.slice(-4);
+    }
+
+    function appendBubble(role, text) {
+      const div = document.createElement("div");
+      div.className = "bubble " + role;
+      div.textContent = text;
+      feedEl.appendChild(div);
+      feedEl.scrollTop = feedEl.scrollHeight;
+    }
+
+    function setChatMeta(text, level = "ok") {
+      chatMetaEl.textContent = text;
+      chatMetaEl.className = "meta";
+      if (level === "warn") chatMetaEl.classList.add("warn-text");
+      if (level === "danger") chatMetaEl.classList.add("danger-text");
+    }
+
+    function setContextMeta(text, level = "ok") {
+      contextMetaEl.textContent = text;
+      contextMetaEl.className = "meta";
+      if (level === "warn") contextMetaEl.classList.add("warn-text");
+      if (level === "danger") contextMetaEl.classList.add("danger-text");
+    }
+
+    function renderFeedbackRows(memoryIds) {
+      feedbackListEl.innerHTML = "";
+      if (!memoryIds.length) return;
+      const title = document.createElement("div");
+      title.className = "meta";
+      title.textContent = "Rate retrieved memories:";
+      feedbackListEl.appendChild(title);
+
+      for (const memoryId of memoryIds) {
+        const row = document.createElement("div");
+        row.className = "feedback-row";
+
+        const idEl = document.createElement("div");
+        idEl.className = "feedback-id";
+        idEl.title = memoryId;
+        idEl.textContent = shortId(memoryId);
+        row.appendChild(idEl);
+
+        const helpfulBtn = document.createElement("button");
+        helpfulBtn.type = "button";
+        helpfulBtn.className = "btn-ghost";
+        helpfulBtn.textContent = "Helpful";
+        helpfulBtn.addEventListener("click", () => sendFeedback(memoryId, true));
+        row.appendChild(helpfulBtn);
+
+        const unhelpfulBtn = document.createElement("button");
+        unhelpfulBtn.type = "button";
+        unhelpfulBtn.className = "btn-danger";
+        unhelpfulBtn.textContent = "Unhelpful";
+        unhelpfulBtn.addEventListener("click", () => sendFeedback(memoryId, false));
+        row.appendChild(unhelpfulBtn);
+
+        feedbackListEl.appendChild(row);
+      }
+    }
+
+    async function sendFeedback(memoryId, helpful) {
+      const payload = {
+        memory_id: memoryId,
+        helpful,
+        outcome_value: helpful ? 1.0 : -1.0
+      };
+      try {
+        const response = await fetch("/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+          const detail = await response.text();
+          throw new Error(detail || "Feedback failed.");
+        }
+        setChatMeta("Feedback recorded for " + shortId(memoryId) + ".", "ok");
+      } catch (error) {
+        setChatMeta(String(error), "danger");
+      }
+    }
+
+    async function sendChat(event) {
+      event.preventDefault();
+      const userId = userIdEl.value.trim();
+      const message = messageEl.value.trim();
+      const limit = Number(limitEl.value || 5);
+      if (!userId || !message) {
+        setChatMeta("User ID and message are required.", "warn");
+        return;
+      }
+
+      appendBubble("user", message);
+      setChatMeta("Calling /chat ...");
+      sendBtnEl.disabled = true;
+
+      try {
+        const response = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: userId, message })
+        });
+        if (!response.ok) {
+          const detail = await response.text();
+          throw new Error(detail || "Chat request failed.");
+        }
+        const payload = await response.json();
+        appendBubble("assistant", payload.response);
+        renderFeedbackRows(payload.memory_ids || []);
+        setChatMeta("Received response. Context items: " + payload.context_items + ".", "ok");
+        if (!contextQueryEl.value.trim()) {
+          contextQueryEl.value = "What should I know about " + userId + " to teach coding effectively?";
+        }
+        if (Number.isFinite(limit) && limit > 0) {
+          await inspectContext();
+        }
+      } catch (error) {
+        appendBubble("system", "Request failed: " + String(error));
+        setChatMeta(String(error), "danger");
+      } finally {
+        sendBtnEl.disabled = false;
+        messageEl.value = "";
+        messageEl.focus();
+      }
+    }
+
+    function renderContextItems(memories) {
+      contextResultEl.innerHTML = "";
+      if (!memories.length) {
+        const empty = document.createElement("div");
+        empty.className = "meta";
+        empty.textContent = "No memories returned.";
+        contextResultEl.appendChild(empty);
+        return;
+      }
+
+      for (const memory of memories) {
+        const card = document.createElement("article");
+        card.className = "memory-card";
+
+        const head = document.createElement("div");
+        head.className = "memory-head";
+        const rank = document.createElement("div");
+        rank.textContent =
+          "#" + memory.rank_position +
+          "  rank=" + memory.rank_score.toFixed(3) +
+          "  importance=" + memory.importance_score.toFixed(3);
+        head.appendChild(rank);
+        const intent = document.createElement("span");
+        intent.className = "intent";
+        intent.textContent = memory.intent;
+        head.appendChild(intent);
+        card.appendChild(head);
+
+        const summary = document.createElement("div");
+        summary.className = "memory-summary";
+        summary.textContent = memory.summary || "(no summary)";
+        card.appendChild(summary);
+
+        const content = document.createElement("div");
+        content.className = "memory-content";
+        content.textContent = memory.content;
+        card.appendChild(content);
+
+        contextResultEl.appendChild(card);
+      }
+    }
+
+    async function inspectContext(event) {
+      if (event) event.preventDefault();
+      const userId = userIdEl.value.trim();
+      const query = contextQueryEl.value.trim();
+      const limit = Number(limitEl.value || 5);
+      if (!userId || !query) {
+        setContextMeta("User ID and inspection query are required.", "warn");
+        return;
+      }
+      inspectBtnEl.disabled = true;
+      setContextMeta("Calling /context ...");
+      try {
+        const response = await fetch("/context", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: userId,
+            query,
+            limit: Math.max(1, Math.min(20, limit || 5))
+          })
+        });
+        if (!response.ok) {
+          const detail = await response.text();
+          throw new Error(detail || "Context inspection failed.");
+        }
+        const payload = await response.json();
+        renderContextItems(payload.memories || []);
+        setContextMeta(
+          "Candidates: " + payload.total_candidates +
+          " | Latency: " + payload.query_execution_time_ms.toFixed(2) + "ms"
+        );
+      } catch (error) {
+        setContextMeta(String(error), "danger");
+      } finally {
+        inspectBtnEl.disabled = false;
+      }
+    }
+
+    chatFormEl.addEventListener("submit", sendChat);
+    contextFormEl.addEventListener("submit", inspectContext);
+    clearBtnEl.addEventListener("click", () => {
+      feedEl.innerHTML = "";
+      feedbackListEl.innerHTML = "";
+      setChatMeta("Feed cleared.");
+    });
+
+    appendBubble("system", "UI ready. Send a message to start the end-to-end Orbit test.");
+  </script>
+</body>
+</html>

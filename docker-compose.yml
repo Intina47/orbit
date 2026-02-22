@@ -1,0 +1,66 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: orbit
+      POSTGRES_USER: orbit
+      POSTGRES_PASSWORD: orbit
+    ports:
+      - "5432:5432"
+    volumes:
+      - orbit-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orbit -d orbit"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  orbit-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    environment:
+      ORBIT_API_HOST: 0.0.0.0
+      ORBIT_API_PORT: 8000
+      ORBIT_AUTO_MIGRATE: "true"
+      MDE_DATABASE_URL: postgresql+psycopg://orbit:orbit@postgres:5432/orbit
+      ORBIT_JWT_SECRET: orbit-dev-secret-change-me
+      ORBIT_JWT_ISSUER: orbit
+      ORBIT_JWT_AUDIENCE: orbit-api
+      ORBIT_RATE_LIMIT_EVENTS_PER_DAY: 100
+      ORBIT_RATE_LIMIT_QUERIES_PER_DAY: 500
+      ORBIT_RATE_LIMIT_PER_MINUTE: 1000/minute
+      ORBIT_OTEL_SERVICE_NAME: orbit-api
+      ORBIT_OTEL_EXPORTER_ENDPOINT: http://otel-collector:4318/v1/traces
+    ports:
+      - "8000:8000"
+
+  prometheus:
+    image: prom/prometheus:latest
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - orbit-api
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./deploy/otel/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+
+volumes:
+  orbit-postgres-data:
+
