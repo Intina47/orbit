@@ -74,10 +74,6 @@ Optional extras:
 
 ## Documentation
 
+- `DEVELOPER_DOCUMENTATION.md`: canonical end-to-end integration guide (SDK, API, auth, personalization, deployment, ops).
 - `BUILD_AND_SPEC.md`: single implementation/spec tracking log.
-- `docs/quickstart.md`: 5-minute integration path.
-- `docs/personalization.md`: adaptive personalization integration guide.
-- `docs/api_reference.md`: SDK methods and REST endpoints.
-- `docs/examples.md`: runnable examples.
-- `docs/troubleshooting.md`: common integration issues.
-- `docs/deployment.md`: PostgreSQL + JWT + Docker + Prometheus + OpenTelemetry.
+- `docs/`: supplemental focused docs and reference materials.

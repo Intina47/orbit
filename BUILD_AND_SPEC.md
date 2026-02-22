@@ -581,3 +581,20 @@ Post-personalization stress audit:
   - `stress_reports/run_20260222_personalization_v2/stress_audit_report.md`
 - Result:
   - All scenarios PASS, including feedback convergence.
+
+### 2026-02-22 - Documentation Consolidation (Single Developer Doc)
+
+Completed:
+- Added canonical single-file developer integration documentation:
+  - `DEVELOPER_DOCUMENTATION.md`
+- The new document consolidates:
+  - SDK integration
+  - REST API integration
+  - JWT/auth contract
+  - adaptive personalization behavior and tuning
+  - deployment and local self-host path
+  - operations/monitoring
+  - troubleshooting and production checklist
+- Updated documentation entry points:
+  - `README.md` now points to `DEVELOPER_DOCUMENTATION.md` as primary docs entry.
+  - `docs/index.md` now points to `DEVELOPER_DOCUMENTATION.md` as canonical.

@@ -1,7 +1,14 @@
-# Orbit SDK & API Docs
+# Orbit Docs
 
-- `quickstart.md`: install and first memory in under 5 minutes.
-- `api_reference.md`: SDK methods and REST endpoints.
-- `examples.md`: copy-paste examples for common integrations.
-- `troubleshooting.md`: common errors and fixes.
-- `deployment.md`: PostgreSQL/JWT/Docker/Prometheus/OpenTelemetry setup.
+Primary entrypoint:
+
+- `../DEVELOPER_DOCUMENTATION.md`: canonical developer integration documentation.
+
+Supplemental references:
+
+- `quickstart.md`
+- `api_reference.md`
+- `personalization.md`
+- `examples.md`
+- `troubleshooting.md`
+- `deployment.md`
