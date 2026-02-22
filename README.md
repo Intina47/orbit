@@ -75,5 +75,6 @@ Optional extras:
 ## Documentation
 
 - `docs/developer_documentation.md`: canonical end-to-end integration guide (SDK, API, auth, personalization, deployment, ops).
+- `docs/GITHUB_PAGES_SETUP.md`: publish docs via GitHub Pages from branch (`main` + `/docs`, no Actions).
 - `BUILD_AND_SPEC.md`: single implementation/spec tracking log.
 - `docs/`: supplemental focused docs and reference materials.

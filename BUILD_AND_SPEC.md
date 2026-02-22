@@ -616,3 +616,27 @@ Completed:
 
 Operator step required in GitHub UI:
 - Repository Settings -> Pages -> Source: **GitHub Actions**.
+
+### 2026-02-22 - GitHub Pages Branch Mode (No Actions)
+
+Context:
+- GitHub Actions execution was blocked by account billing lock.
+- Switched docs hosting to branch-based Pages deployment.
+
+Completed:
+- Removed Actions-based Pages workflow:
+  - `.github/workflows/docs-pages.yml`
+- Made docs landing page Jekyll/GitHub Pages friendly:
+  - `docs/index.md` now uses plain markdown links (no Sphinx-only directives).
+- Added Pages branch setup runbook:
+  - `docs/GITHUB_PAGES_SETUP.md`
+- Added Jekyll config for docs site:
+  - `docs/_config.yml`
+- Updated docs entrypoint in README:
+  - `README.md` now references branch-based Pages setup.
+
+Operator step required in GitHub UI:
+- Repository Settings -> Pages -> Build and deployment:
+  - Source: **Deploy from a branch**
+  - Branch: `main`
+  - Folder: `/docs`
