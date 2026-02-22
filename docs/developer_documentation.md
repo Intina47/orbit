@@ -18,12 +18,13 @@ Orbit handles:
 
 ## Integration Modes
 
-You can integrate Orbit in two ways.
+You can integrate Orbit in three ways.
 
 | Mode | Use when | Entry point |
 | --- | --- | --- |
 | Python SDK | Your app is Python and you want fastest integration | `from orbit import MemoryEngine` |
 | REST API | Non-Python stack or service-to-service architecture | `POST /v1/ingest`, `GET /v1/retrieve`, `POST /v1/feedback` |
+| OpenClaw Plugin | You run OpenClaw agents and want memory wiring without custom glue code | `integrations/openclaw-memory/` |
 
 ## 5-Minute Integration (SDK)
 
@@ -156,6 +157,36 @@ async def feedback(memory_id: str, helpful: bool) -> dict[str, bool]:
     )
     return {"recorded": True}
 ```
+
+## OpenClaw Plugin Integration (Skeleton)
+
+Orbit now includes an OpenClaw plugin scaffold:
+
+- package: `integrations/openclaw-memory/`
+- npm name: `@orbit/openclaw-memory`
+- plugin manifest: `integrations/openclaw-memory/openclaw.plugin.json`
+
+Build:
+
+```bash
+cd integrations/openclaw-memory
+npm install
+npm run build
+```
+
+Required runtime env:
+
+- `ORBIT_JWT_TOKEN`
+- `ORBIT_API_URL` (default `http://127.0.0.1:8000`)
+
+Behavior:
+
+- `before_agent_start`: retrieves top Orbit memories and appends them to prompt input.
+- `agent_end`: ingests user input and assistant output into Orbit.
+- utility command/tool surfaces:
+  - command: `orbit-memory-status`
+  - tool: `orbit_recall`
+  - tool: `orbit_feedback`
 
 ## SDK API Surface
 
@@ -392,4 +423,5 @@ Slow or noisy retrieval:
 - API service: `src/orbit_api/`
 - Core engine: `src/memory_engine/`, `src/decision_engine/`
 - Local chatbot integration: `examples/live_chatbot_ollama/`
+- OpenClaw plugin skeleton: `integrations/openclaw-memory/`
 - Build/spec log: `BUILD_AND_SPEC.md`

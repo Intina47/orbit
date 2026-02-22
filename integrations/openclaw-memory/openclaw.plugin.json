@@ -1,0 +1,69 @@
+{
+  "name": "@orbit/openclaw-memory",
+  "id": "orbit.memory",
+  "kind": "memory",
+  "displayName": "Orbit Memory",
+  "description": "Injects personalized context into OpenClaw agents using Orbit ingest, retrieve, and feedback APIs.",
+  "version": "0.2.0",
+  "author": "Orbit",
+  "license": "MIT",
+  "category": "memory",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "orbitApiUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:8000"
+      },
+      "orbitJwtToken": {
+        "type": "string"
+      },
+      "orbitMemoryLimit": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 20,
+        "default": 5
+      },
+      "orbitEntityPrefix": {
+        "type": "string",
+        "default": "openclaw"
+      },
+      "orbitUserEventType": {
+        "type": "string",
+        "default": "user_prompt"
+      },
+      "orbitAssistantEventType": {
+        "type": "string",
+        "default": "assistant_response"
+      },
+      "orbitCaptureAssistantOutput": {
+        "type": "boolean",
+        "default": true
+      },
+      "orbitPreferSessionKey": {
+        "type": "boolean",
+        "default": true
+      },
+      "identityLinks": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "secretFields": [
+      "orbitJwtToken"
+    ]
+  },
+  "slots": {
+    "memory": {
+      "title": "Orbit Memory",
+      "description": "Adaptive memory ranking and retrieval for user and agent conversations."
+    }
+  }
+}

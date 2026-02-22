@@ -48,6 +48,10 @@ Live chatbot integration sample (Orbit + Ollama):
 - `examples/live_chatbot_ollama/app.py`
 - `examples/live_chatbot_ollama/README.md`
 
+OpenClaw plugin scaffold (Orbit memory slot):
+
+- `integrations/openclaw-memory/README.md`
+
 ## Core Quality Gates
 
 ```bash
@@ -76,5 +80,6 @@ Optional extras:
 
 - `docs/developer_documentation.md`: canonical end-to-end integration guide (SDK, API, auth, personalization, deployment, ops).
 - `docs/GITHUB_PAGES_SETUP.md`: publish docs via GitHub Pages from branch (`main` + `/docs`, no Actions).
+- `metaData.md`: repository SEO metadata (keywords, technologies, packages, integrations, discovery terms).
 - `BUILD_AND_SPEC.md`: single implementation/spec tracking log.
 - `docs/`: supplemental focused docs and reference materials.

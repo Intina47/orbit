@@ -1,0 +1,75 @@
+{
+  "name": "@orbit/openclaw-memory",
+  "version": "0.2.0",
+  "description": "OpenClaw memory slot plugin powered by Orbit Memory Infrastructure",
+  "author": "Orbit",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "keywords": [
+    "orbit",
+    "memory",
+    "openclaw",
+    "agent",
+    "plugin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/orbit.git",
+    "directory": "integrations/openclaw-memory"
+  },
+  "homepage": "https://github.com/openclaw/orbit/tree/main/integrations/openclaw-memory",
+  "bugs": {
+    "url": "https://github.com/openclaw/orbit/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "dev": "tsup src/index.ts --format esm --dts --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "validate": "npm run typecheck && npm run test && npm run build",
+    "prepublishOnly": "npm run validate",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.2.4"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "openclaw.extensions": {
+    "plugin": "./dist/index.js"
+  }
+}
