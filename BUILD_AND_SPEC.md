@@ -596,5 +596,23 @@ Completed:
   - operations/monitoring
   - troubleshooting and production checklist
 - Updated documentation entry points:
-  - `README.md` now points to `DEVELOPER_DOCUMENTATION.md` as primary docs entry.
-  - `docs/index.md` now points to `DEVELOPER_DOCUMENTATION.md` as canonical.
+  - `README.md` now points to canonical developer docs.
+  - `docs/index.md` now points to canonical developer docs.
+
+### 2026-02-22 - GitHub Pages Documentation Hosting
+
+Completed:
+- Added GitHub Pages deployment workflow:
+  - `.github/workflows/docs-pages.yml`
+  - Builds Sphinx docs from `docs/` and deploys to GitHub Pages on `main`.
+- Standardized docs-site source of truth:
+  - Full canonical developer guide now lives in:
+    - `docs/developer_documentation.md`
+  - Root file `DEVELOPER_DOCUMENTATION.md` is now a pointer to docs-site canonical file.
+- Improved docs navigation for published site:
+  - `docs/index.md` now uses a MyST/Sphinx `toctree`.
+- Added docs build artifact ignore:
+  - `.gitignore` includes `docs/_build/`.
+
+Operator step required in GitHub UI:
+- Repository Settings -> Pages -> Source: **GitHub Actions**.

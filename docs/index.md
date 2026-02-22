@@ -1,14 +1,21 @@
-# Orbit Docs
+# Orbit Documentation
 
-Primary entrypoint:
+## Start Here
 
-- `../DEVELOPER_DOCUMENTATION.md`: canonical developer integration documentation.
+`developer_documentation.md` is the canonical integration guide.
 
-Supplemental references:
+```{toctree}
+:maxdepth: 2
+:caption: Orbit Developer Docs
 
-- `quickstart.md`
-- `api_reference.md`
-- `personalization.md`
-- `examples.md`
-- `troubleshooting.md`
-- `deployment.md`
+developer_documentation
+quickstart
+api_reference
+personalization
+deployment
+troubleshooting
+examples
+ARCHITECTURE
+TESTING
+FORMULAS
+```

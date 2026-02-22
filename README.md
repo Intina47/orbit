@@ -74,6 +74,6 @@ Optional extras:
 
 ## Documentation
 
-- `DEVELOPER_DOCUMENTATION.md`: canonical end-to-end integration guide (SDK, API, auth, personalization, deployment, ops).
+- `docs/developer_documentation.md`: canonical end-to-end integration guide (SDK, API, auth, personalization, deployment, ops).
 - `BUILD_AND_SPEC.md`: single implementation/spec tracking log.
 - `docs/`: supplemental focused docs and reference materials.

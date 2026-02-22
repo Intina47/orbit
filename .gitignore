@@ -10,3 +10,4 @@ memory.db
 *.idx
 .env
 .venv/
+docs/_build/
