@@ -892,3 +892,45 @@ Completed:
 Validation:
 - `python -m build`: PASS
 - `python -m ruff check src tests`: PASS
+
+### 2026-02-23 - Product Validation Track (Baseline vs Orbit Scorecard)
+
+Completed:
+- Added a reproducible evaluation harness for product quality validation:
+  - `src/orbit/eval_harness.py`
+  - compares a naive baseline retrieval strategy vs Orbit retrieval on the same synthetic workload
+  - computes scorecard metrics:
+    - `Precision@5`
+    - `Top1 relevant rate`
+    - `Personalization hit rate`
+    - `Predicted helpfulness rate`
+    - `Assistant noise rate`
+    - `Stale memory rate`
+  - writes concrete artifacts:
+    - `orbit_eval_scorecard.json`
+    - `orbit_eval_scorecard.md` (includes per-query retrieval ordering payload traces)
+- Added CLI runner:
+  - `scripts/run_orbit_eval.py`
+  - supports configurable output path, sqlite path, embedding dimension, noise scale
+  - defaults to quiet mode and prints concise metrics + artifact paths
+- Added unit tests for scorecard logic:
+  - `tests/unit/test_eval_harness.py`
+  - covers tokenization, baseline scoring bias behavior, per-query metric computation, aggregation
+- Updated developer docs and README with evaluation usage:
+  - `docs/developer_documentation.md`
+  - `README.md`
+
+Observed sample scorecard (local run):
+- Baseline:
+  - `avg_precision_at_5=0.000`
+  - `assistant_noise_rate=0.950`
+- Orbit:
+  - `avg_precision_at_5=0.350`
+  - `assistant_noise_rate=0.000`
+  - still shows a literal gap on some queries (`recurring_error`) and occasional stale profile surfacing
+
+Validation:
+- `python -m ruff check src tests`: PASS
+- `python -m mypy src`: PASS
+- `pytest -q tests/unit/test_eval_harness.py`: PASS
+- `python scripts/run_orbit_eval.py --output-dir tmp/eval_sample --sqlite-path tmp/orbit_eval.db`: PASS

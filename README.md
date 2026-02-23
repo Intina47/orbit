@@ -52,6 +52,10 @@ OpenClaw plugin scaffold (Orbit memory slot):
 
 - `integrations/openclaw-memory/README.md`
 
+Evaluation harness (baseline vs Orbit):
+
+- `python scripts/run_orbit_eval.py --output-dir eval_reports/latest`
+
 ## Core Quality Gates
 
 ```bash

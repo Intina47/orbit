@@ -388,6 +388,28 @@ Rate limit headers:
 - `Retry-After` on `429`
 - `X-Idempotency-Replayed` on write endpoints (`true|false`)
 
+## Evaluation Harness (Baseline vs Orbit)
+
+Use the scorecard harness to measure whether Orbit is actually improving retrieval quality:
+
+```bash
+python scripts/run_orbit_eval.py --output-dir eval_reports/latest
+```
+
+Artifacts produced:
+
+- `orbit_eval_scorecard.json`
+- `orbit_eval_scorecard.md`
+
+Key tracked metrics:
+
+- `Precision@5`
+- `Top1 relevant rate`
+- `Personalization hit rate`
+- `Predicted helpfulness rate`
+- `Assistant noise rate`
+- `Stale memory rate`
+
 ## Troubleshooting
 
 401 Unauthorized:
