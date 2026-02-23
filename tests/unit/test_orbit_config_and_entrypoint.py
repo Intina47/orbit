@@ -37,6 +37,10 @@ def test_api_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("ORBIT_MAX_INGEST_CONTENT_CHARS", "1234")
     monkeypatch.setenv("ORBIT_MAX_QUERY_CHARS", "321")
     monkeypatch.setenv("ORBIT_MAX_BATCH_ITEMS", "55")
+    monkeypatch.setenv(
+        "ORBIT_CORS_ALLOW_ORIGINS",
+        "https://orbit-web.vercel.app,https://orbit.example.com",
+    )
     monkeypatch.setenv("ORBIT_ENV", "production")
 
     config = ApiConfig.from_env()
@@ -50,7 +54,22 @@ def test_api_config_from_env(monkeypatch) -> None:
     assert config.max_ingest_content_chars == 1234
     assert config.max_query_chars == 321
     assert config.max_batch_items == 55
+    assert config.cors_allow_origins == [
+        "https://orbit-web.vercel.app",
+        "https://orbit.example.com",
+    ]
     assert config.environment == "production"
+
+
+def test_api_config_normalizes_render_database_url() -> None:
+    config = ApiConfig(
+        database_url="postgres://user:pass@db.render.com:5432/orbit",
+        jwt_secret="secret",
+    )
+    assert (
+        config.database_url
+        == "postgresql+psycopg://user:pass@db.render.com:5432/orbit"
+    )
 
 
 def test_api_config_rejects_default_jwt_secret_in_production() -> None:

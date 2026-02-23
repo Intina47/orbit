@@ -4,6 +4,8 @@ import os
 
 from pydantic import BaseModel, field_validator
 
+from decision_engine.database_url import normalize_database_url
+
 
 class EngineConfig(BaseModel):
     """Runtime configuration for the memory decision engine."""
@@ -52,12 +54,7 @@ class EngineConfig(BaseModel):
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        stripped = value.strip()
-        if not stripped:
-            return None
-        return stripped
+        return normalize_database_url(value)
 
     @field_validator("max_content_chars", "assistant_max_content_chars")
     @classmethod
@@ -109,7 +106,7 @@ class EngineConfig(BaseModel):
 
     @classmethod
     def from_env(cls) -> EngineConfig:
-        database_url = os.getenv("MDE_DATABASE_URL")
+        database_url = normalize_database_url(os.getenv("MDE_DATABASE_URL"))
         return cls(
             embedding_dim=int(os.getenv("MDE_EMBEDDING_DIM", "384")),
             sqlite_path=os.getenv("MDE_SQLITE_PATH", "memory.db"),

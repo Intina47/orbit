@@ -824,3 +824,51 @@ Validation:
 - `pytest -q`: PASS
 - `python -m mypy src`: PASS
 - `pylint src --fail-under=9.0`: PASS (9.94/10)
+
+### 2026-02-23 - Deployment Track (Render API + Vercel Frontend Contract)
+
+Completed:
+- Added Render Blueprint deployment file:
+  - `render.yaml`
+  - provisions `orbit-api` web service (Docker) + `orbit-postgres` managed database
+  - sets production env defaults, health check path, and API runtime guardrails
+- Added deployment runbook for operators and integrators:
+  - `docs/DEPLOY_RENDER_VERCEL.md`
+  - includes Render deployment steps, required env vars, smoke test flow, and Vercel server-side JWT route pattern
+- Hardened container runtime for PaaS behavior:
+  - `scripts/docker-entrypoint.sh` now:
+    - respects `ORBIT_AUTO_MIGRATE`
+    - binds API port from `PORT` fallback (`PORT` -> `ORBIT_API_PORT` -> `8000`)
+- Added database URL normalization for Render-style connection strings:
+  - new utility `src/decision_engine/database_url.py`
+  - `postgres://...` and `postgresql://...` are normalized to `postgresql+psycopg://...`
+  - wired into:
+    - `src/decision_engine/config.py`
+    - `src/orbit_api/config.py`
+    - `src/orbit_api/__main__.py`
+    - `migrations/env.py`
+- Added CORS configuration for browser-based frontend integration:
+  - `src/orbit_api/config.py`:
+    - new `ORBIT_CORS_ALLOW_ORIGINS` support (comma-separated parsing)
+  - `src/orbit_api/app.py`:
+    - conditional `CORSMiddleware` wiring
+    - exposes API headers needed by clients (`X-RateLimit-*`, `Retry-After`, `X-Idempotency-Replayed`)
+- Updated docs and env references:
+  - `.env.example` includes `ORBIT_CORS_ALLOW_ORIGINS`
+  - `docs/developer_documentation.md` references hosted deployment runbook
+  - `README.md` includes deployment runbook link
+
+Tests Added/Updated:
+- `tests/unit/test_decision_config.py`:
+  - validates Render-style Postgres URL normalization
+- `tests/unit/test_orbit_config_and_entrypoint.py`:
+  - validates `ORBIT_CORS_ALLOW_ORIGINS` env parsing
+  - validates API config Postgres URL normalization
+- `tests/integration/test_orbit_api_errors.py`:
+  - CORS preflight behavior for configured Vercel origin
+
+Validation:
+- `python -m ruff check src tests migrations scripts`: PASS
+- `pytest -q`: PASS
+- `python -m mypy src`: PASS
+- `pylint src --fail-under=9.0`: PASS (9.94/10)

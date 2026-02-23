@@ -6,6 +6,8 @@ import os
 
 from pydantic import BaseModel, field_validator, model_validator
 
+from decision_engine.database_url import normalize_database_url
+
 
 class ApiConfig(BaseModel):
     """Runtime settings for Orbit API server."""
@@ -32,15 +34,16 @@ class ApiConfig(BaseModel):
 
     otel_service_name: str = "orbit-api"
     otel_exporter_endpoint: str | None = None
+    cors_allow_origins: list[str] = []
 
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
+        normalized = normalize_database_url(value)
+        if normalized is None:
             msg = "database_url cannot be empty"
             raise ValueError(msg)
-        return stripped
+        return normalized
 
     @field_validator("jwt_secret")
     @classmethod
@@ -95,6 +98,21 @@ class ApiConfig(BaseModel):
             raise ValueError(msg)
         return normalized
 
+    @field_validator("cors_allow_origins", mode="before")
+    @classmethod
+    def parse_cors_allow_origins(
+        cls,
+        value: str | list[str] | None,
+    ) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        msg = "cors_allow_origins must be a string or list of strings"
+        raise ValueError(msg)
+
     @model_validator(mode="after")
     def validate_production_jwt_secret(self) -> ApiConfig:
         if self.environment in {"prod", "production"} and (
@@ -107,10 +125,14 @@ class ApiConfig(BaseModel):
     @classmethod
     def from_env(cls) -> ApiConfig:
         fallback_path = os.getenv("MDE_SQLITE_PATH", "memory.db")
-        database_url = os.getenv(
+        database_url = normalize_database_url(
+            os.getenv(
             "MDE_DATABASE_URL",
             "postgresql+psycopg://orbit:orbit@postgres:5432/orbit",
+            )
         )
+        if database_url is None:
+            database_url = "postgresql+psycopg://orbit:orbit@postgres:5432/orbit"
         return cls(
             api_version=os.getenv("ORBIT_API_VERSION", "1.0.0"),
             database_url=database_url,
@@ -134,6 +156,7 @@ class ApiConfig(BaseModel):
             jwt_required_scope=_env_optional("ORBIT_JWT_REQUIRED_SCOPE"),
             otel_service_name=os.getenv("ORBIT_OTEL_SERVICE_NAME", "orbit-api"),
             otel_exporter_endpoint=_env_optional("ORBIT_OTEL_EXPORTER_ENDPOINT"),
+            cors_allow_origins=_env_csv("ORBIT_CORS_ALLOW_ORIGINS"),
         )
 
 
@@ -143,6 +166,13 @@ def _env_optional(name: str) -> str | None:
         return None
     stripped = raw.strip()
     return stripped if stripped else None
+
+
+def _env_csv(name: str) -> list[str]:
+    raw = _env_optional(name)
+    if raw is None:
+        return []
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 def _env_int(name: str, default: int) -> int:

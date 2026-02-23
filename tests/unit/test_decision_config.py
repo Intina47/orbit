@@ -19,6 +19,12 @@ def test_decision_engine_config_from_env(monkeypatch) -> None:
     assert cfg.personalization_similarity_threshold == 0.9
 
 
+def test_decision_engine_config_normalizes_render_database_url(monkeypatch) -> None:
+    monkeypatch.setenv("MDE_DATABASE_URL", "postgres://user:pass@host:5432/orbit")
+    cfg = EngineConfig.from_env()
+    assert cfg.database_url == "postgresql+psycopg://user:pass@host:5432/orbit"
+
+
 def test_invalid_embedding_dim_rejected() -> None:
     with pytest.raises(ValueError):
         EngineConfig(embedding_dim=0)

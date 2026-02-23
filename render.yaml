@@ -1,0 +1,48 @@
+services:
+  - type: web
+    name: orbit-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeployTrigger: commit
+    healthCheckPath: /v1/health
+    envVars:
+      - key: ORBIT_ENV
+        value: production
+      - key: ORBIT_AUTO_MIGRATE
+        value: "true"
+      - key: MDE_DATABASE_URL
+        fromDatabase:
+          name: orbit-postgres
+          property: connectionString
+      - key: ORBIT_JWT_SECRET
+        generateValue: true
+      - key: ORBIT_JWT_ALGORITHM
+        value: HS256
+      - key: ORBIT_JWT_ISSUER
+        value: orbit
+      - key: ORBIT_JWT_AUDIENCE
+        value: orbit-api
+      - key: ORBIT_RATE_LIMIT_EVENTS_PER_DAY
+        value: "1000"
+      - key: ORBIT_RATE_LIMIT_QUERIES_PER_DAY
+        value: "5000"
+      - key: ORBIT_RATE_LIMIT_PER_MINUTE
+        value: 300/minute
+      - key: ORBIT_MAX_INGEST_CONTENT_CHARS
+        value: "20000"
+      - key: ORBIT_MAX_QUERY_CHARS
+        value: "2000"
+      - key: ORBIT_MAX_BATCH_ITEMS
+        value: "100"
+      - key: ORBIT_CORS_ALLOW_ORIGINS
+        value: https://your-frontend.vercel.app
+      - key: ORBIT_OTEL_SERVICE_NAME
+        value: orbit-api
+      - key: ORBIT_OTEL_EXPORTER_ENDPOINT
+        sync: false
+
+databases:
+  - name: orbit-postgres
+    databaseName: orbit
+    user: orbit

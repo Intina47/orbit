@@ -15,6 +15,7 @@ from fastapi import (
     Response,
     status,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -78,6 +79,25 @@ def create_app(
         api_config=config,
         engine_config=engine_config,
     )
+
+    if config.cors_allow_origins:
+        allow_origins = (
+            ["*"] if any(item == "*" for item in config.cors_allow_origins) else config.cors_allow_origins
+        )
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allow_origins,
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=[
+                "X-RateLimit-Limit",
+                "X-RateLimit-Remaining",
+                "X-RateLimit-Reset",
+                "Retry-After",
+                "X-Idempotency-Replayed",
+            ],
+        )
 
     limiter = Limiter(
         key_func=get_remote_address,

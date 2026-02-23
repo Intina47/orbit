@@ -16,7 +16,7 @@ JWT_ISSUER = "orbit-tests"
 JWT_AUDIENCE = "orbit-tests-api"
 
 
-def _build_app(tmp_path: Path):
+def _build_app(tmp_path: Path, *, cors_allow_origins: list[str] | None = None):
     db_path = tmp_path / "errors.db"
     api_config = ApiConfig(
         database_url=f"sqlite:///{db_path}",
@@ -26,6 +26,7 @@ def _build_app(tmp_path: Path):
         jwt_secret=JWT_SECRET,
         jwt_issuer=JWT_ISSUER,
         jwt_audience=JWT_AUDIENCE,
+        cors_allow_origins=cors_allow_origins or [],
     )
     engine_config = EngineConfig(
         sqlite_path=str(db_path),
@@ -230,5 +231,33 @@ def test_api_idempotency_replay_and_conflict(tmp_path: Path) -> None:
                 },
             )
             assert conflict_feedback.status_code == 409
+
+    asyncio.run(_run())
+
+
+def test_api_cors_preflight_for_vercel_origin(tmp_path: Path) -> None:
+    async def _run() -> None:
+        app = _build_app(
+            tmp_path,
+            cors_allow_origins=["https://orbit-web.vercel.app"],
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            response = await client.options(
+                "/v1/ingest",
+                headers={
+                    "Origin": "https://orbit-web.vercel.app",
+                    "Access-Control-Request-Method": "POST",
+                    "Access-Control-Request-Headers": "authorization,content-type",
+                },
+            )
+            assert response.status_code in {200, 204}
+            assert (
+                response.headers.get("access-control-allow-origin")
+                == "https://orbit-web.vercel.app"
+            )
 
     asyncio.run(_run())

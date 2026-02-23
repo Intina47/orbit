@@ -287,6 +287,10 @@ Run migrations manually if needed:
 python -m alembic upgrade head
 ```
 
+Hosted deployment runbook:
+
+- `docs/DEPLOY_RENDER_VERCEL.md` (Render API + Postgres + Vercel frontend)
+
 ## Configuration Reference (Most Important)
 
 Core:
@@ -308,6 +312,7 @@ Auth:
 - `ORBIT_JWT_AUDIENCE`
 - `ORBIT_JWT_ALGORITHM`
 - `ORBIT_JWT_REQUIRED_SCOPE` (optional)
+- `ORBIT_CORS_ALLOW_ORIGINS` (comma-separated frontend origins, e.g. Vercel URL)
 
 Rate limits:
 

@@ -1,20 +1,24 @@
 from __future__ import annotations
 
-from logging.config import fileConfig
 import os
+from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from decision_engine.database_url import normalize_database_url
 from memory_engine.storage.db import Base
 
 config = context.config
 
-database_url = os.getenv(
-    "MDE_DATABASE_URL",
-    config.get_main_option("sqlalchemy.url"),
+database_url = normalize_database_url(
+    os.getenv(
+        "MDE_DATABASE_URL",
+        config.get_main_option("sqlalchemy.url"),
+    )
 )
-config.set_main_option("sqlalchemy.url", database_url)
+if database_url is not None:
+    config.set_main_option("sqlalchemy.url", database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -58,4 +62,3 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
-

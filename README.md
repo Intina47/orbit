@@ -79,6 +79,7 @@ Optional extras:
 ## Documentation
 
 - `docs/developer_documentation.md`: canonical end-to-end integration guide (SDK, API, auth, personalization, deployment, ops).
+- `docs/DEPLOY_RENDER_VERCEL.md`: production deployment runbook for Render API + Vercel frontend.
 - `docs/GITHUB_PAGES_SETUP.md`: publish docs via GitHub Pages from branch (`main` + `/docs`, no Actions).
 - `metaData.md`: repository SEO metadata (keywords, technologies, packages, integrations, discovery terms).
 - `BUILD_AND_SPEC.md`: single implementation/spec tracking log.

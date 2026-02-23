@@ -8,16 +8,18 @@ import uvicorn
 from alembic import command
 from alembic.config import Config as AlembicConfig
 
+from decision_engine.database_url import normalize_database_url
 from orbit_api.app import create_app
 
 
 def main() -> None:
     _run_migrations_if_enabled()
     app = create_app()
+    port_raw = os.getenv("PORT", os.getenv("ORBIT_API_PORT", "8000"))
     uvicorn.run(
         app,
         host=os.getenv("ORBIT_API_HOST", "0.0.0.0"),
-        port=int(os.getenv("ORBIT_API_PORT", "8000")),
+        port=int(port_raw),
     )
 
 
@@ -26,7 +28,7 @@ def _run_migrations_if_enabled() -> None:
     if enabled not in {"1", "true", "yes", "on"}:
         return
     alembic_cfg = AlembicConfig("alembic.ini")
-    database_url = os.getenv("MDE_DATABASE_URL")
+    database_url = normalize_database_url(os.getenv("MDE_DATABASE_URL"))
     if database_url:
         alembic_cfg.set_main_option("sqlalchemy.url", database_url)
     command.upgrade(alembic_cfg, "head")
