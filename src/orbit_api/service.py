@@ -333,7 +333,11 @@ class OrbitApiService:
             ranked=ranked,
             candidates=candidates,
         )
-        selected = self._select_with_intent_caps(ranked, top_k=request.limit)
+        selected = self._select_with_intent_caps(
+            ranked,
+            top_k=request.limit,
+            query=request.query,
+        )
         memories: list[Memory] = []
         for index, ranked_item in enumerate(selected, start=1):
             self._engine.storage.update_retrieval(ranked_item.memory.memory_id)
@@ -722,6 +726,7 @@ class OrbitApiService:
         self,
         ranked: list[Any],
         top_k: int,
+        query: str = "",
     ) -> list[Any]:
         if top_k <= 0:
             return []
@@ -730,17 +735,23 @@ class OrbitApiService:
         )
         max_share = min(max(max_share, 0.0), 1.0)
         assistant_cap = self._assistant_cap(top_k, max_share=max_share)
+        bucket_caps = self._intent_bucket_caps(
+            top_k=top_k,
+            query=query.strip().lower(),
+            assistant_cap=assistant_cap,
+        )
         selected: list[Any] = []
-        assistant_count = 0
+        bucket_counts: dict[str, int] = {}
         deferred: list[Any] = []
         for item in ranked:
-            is_assistant = self._is_assistant_intent(item.memory.intent)
-            if is_assistant and assistant_count >= assistant_cap:
+            bucket = self._intent_bucket(item.memory.intent)
+            cap = bucket_caps.get(bucket, top_k)
+            current_count = bucket_counts.get(bucket, 0)
+            if current_count >= cap:
                 deferred.append(item)
                 continue
             selected.append(item)
-            if is_assistant:
-                assistant_count += 1
+            bucket_counts[bucket] = current_count + 1
             if len(selected) >= top_k:
                 return selected
         for item in deferred:
@@ -748,6 +759,62 @@ class OrbitApiService:
                 break
             selected.append(item)
         return selected
+
+    def _intent_bucket_caps(
+        self,
+        *,
+        top_k: int,
+        query: str,
+        assistant_cap: int,
+    ) -> dict[str, int]:
+        profile_cap = min(top_k, max(2, int(top_k * 0.6)))
+        if self._is_style_or_format_query(query):
+            profile_cap = top_k
+        elif self._is_architecture_or_progress_query(query):
+            profile_cap = 1
+        pattern_cap = 2 if self._is_mistake_pattern_query(query) else 1
+        return {
+            "assistant": assistant_cap,
+            "profile": profile_cap,
+            "pattern": min(pattern_cap, top_k),
+        }
+
+    @staticmethod
+    def _is_architecture_or_progress_query(query: str) -> bool:
+        terms = _tokenize_query(query)
+        if not terms:
+            return False
+        architecture_terms = {
+            "architecture",
+            "project",
+            "projects",
+            "structuring",
+            "structure",
+            "module",
+            "modules",
+            "scaling",
+            "scale",
+            "advanced",
+            "intermediate",
+            "roadmap",
+        }
+        return bool(terms.intersection(architecture_terms))
+
+    @staticmethod
+    def _is_style_or_format_query(query: str) -> bool:
+        terms = _tokenize_query(query)
+        if not terms:
+            return False
+        style_terms = {
+            "format",
+            "formatted",
+            "style",
+            "tone",
+            "wording",
+            "template",
+            "concise",
+        }
+        return bool(terms.intersection(style_terms))
 
     def _ensure_non_assistant_candidates(
         self,
@@ -797,6 +864,24 @@ class OrbitApiService:
     @staticmethod
     def _assistant_cap(top_k: int, max_share: float) -> int:
         return min(top_k, max(0, int(top_k * max_share)))
+
+    @classmethod
+    def _intent_bucket(cls, intent: str) -> str:
+        normalized = intent.strip().lower()
+        if cls._is_assistant_intent(normalized):
+            return "assistant"
+        if normalized == "learning_progress":
+            return "progress"
+        if normalized == "inferred_learning_pattern":
+            return "pattern"
+        if normalized in {
+            "preference_stated",
+            "user_profile",
+            "user_fact",
+            "inferred_preference",
+        }:
+            return "profile"
+        return "other"
 
     @staticmethod
     def _is_assistant_intent(intent: str) -> bool:

@@ -98,9 +98,14 @@ Orbit now creates inferred memories automatically when enough signal exists.
 - `inferred_learning_pattern`
   - Trigger: repeated semantically similar user patterns for same entity.
   - Example: "alice repeatedly asks about for loops."
+  - Also triggers on recurring failure clusters from `user_attempt` / `assessment_result`.
+  - Example: "alice repeatedly struggles with list indexing TypeError."
 - `inferred_preference`
   - Trigger: consistent positive feedback trend on assistant response style.
   - Example: "alice prefers concise explanations."
+- `learning_progress` (inferred)
+  - Trigger: repeated positive progress/assessment signals over time.
+  - Example: "alice has progressed in class design and project structure."
 
 These inferred memories are stored as regular memories and appear in normal retrieval.
 

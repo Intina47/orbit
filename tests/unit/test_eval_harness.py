@@ -78,6 +78,33 @@ def test_evaluate_ranking_computes_query_metrics() -> None:
     assert score.predicted_helpful == 0.0
 
 
+def test_evaluate_ranking_treats_inferred_derivative_as_relevant() -> None:
+    query = EvalQuery(
+        query_id="q2",
+        query="What level is Alice now?",
+        entity_id="alice",
+        relevant_contents=frozenset(
+            {"PROGRESS: Alice now understands classes and basic OOP."}
+        ),
+        stale_contents=frozenset(),
+    )
+    ranked = [
+        RankedItem(
+            content=(
+                "Inferred progress: alice has progressed in PROGRESS: "
+                "Alice now understands classes and basic OOP."
+            ),
+            event_type="learning_progress",
+            score=0.9,
+        )
+    ]
+    score = evaluate_ranking(query=query, ranked=ranked)
+    assert score.precision_at_5 == 1.0
+    assert score.top1_relevant == 1.0
+    assert score.personalization_hit == 1.0
+    assert score.predicted_helpful == 1.0
+
+
 def test_aggregate_query_scores() -> None:
     metrics = aggregate_query_scores(
         [

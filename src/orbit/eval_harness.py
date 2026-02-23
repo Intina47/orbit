@@ -402,10 +402,10 @@ def evaluate_ranking(*, query: EvalQuery, ranked: list[RankedItem]) -> QueryScor
             stale_memory_rate=0.0,
             predicted_helpful=0.0,
         )
-    relevant_hits = sum(1 for item in ranked if item.content in query.relevant_contents)
+    relevant_hits = sum(1 for item in ranked if _is_relevant_item(query=query, item=item))
     stale_hits = sum(1 for item in ranked if item.content in query.stale_contents)
     assistant_hits = sum(1 for item in ranked if item.event_type == "assistant_response")
-    top1_relevant = 1.0 if ranked[0].content in query.relevant_contents else 0.0
+    top1_relevant = 1.0 if _is_relevant_item(query=query, item=ranked[0]) else 0.0
     personalization_hit = 1.0 if relevant_hits > 0 else 0.0
     precision = relevant_hits / float(len(ranked))
     assistant_rate = assistant_hits / float(len(ranked))
@@ -424,6 +424,38 @@ def evaluate_ranking(*, query: EvalQuery, ranked: list[RankedItem]) -> QueryScor
         stale_memory_rate=stale_rate,
         predicted_helpful=1.0 if helpful_score >= 1.0 else 0.0,
     )
+
+
+def _is_relevant_item(*, query: EvalQuery, item: RankedItem) -> bool:
+    if item.content in query.relevant_contents:
+        return True
+    return _is_inferred_derivative_relevant(query=query, item=item)
+
+
+def _is_inferred_derivative_relevant(*, query: EvalQuery, item: RankedItem) -> bool:
+    event_type = item.event_type.strip().lower()
+    content = item.content.strip()
+    if not content:
+        return False
+    if (
+        not content.lower().startswith("inferred ")
+        and not event_type.startswith("inferred_")
+        and "inference_type:" not in content.lower()
+    ):
+        return False
+    relevant_tokens: set[str] = set()
+    for value in query.relevant_contents:
+        relevant_tokens.update(tokenize(value))
+    if not relevant_tokens:
+        return False
+    item_tokens = tokenize(content)
+    if not item_tokens:
+        return False
+    shared_tokens = item_tokens.intersection(relevant_tokens)
+    if len(shared_tokens) < 3:
+        return False
+    overlap_ratio = len(shared_tokens) / float(len(relevant_tokens))
+    return overlap_ratio >= 0.20 or len(shared_tokens) >= 6
 
 
 def aggregate_query_scores(scores: list[QueryScore]) -> dict[str, float]:

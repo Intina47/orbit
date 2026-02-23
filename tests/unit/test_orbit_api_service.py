@@ -317,6 +317,96 @@ def test_service_suppresses_stale_profile_when_newer_progress_exists(
         service.close()
 
 
+def test_service_diversifies_profiles_for_architecture_queries(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        profile_1 = _retrieved(
+            "profile_1",
+            intent="preference_stated",
+            content="PROFILE: Alice prefers short explanations.",
+            score=0.95,
+        )
+        profile_2 = _retrieved(
+            "profile_2",
+            intent="preference_stated",
+            content="PROFILE: Alice learns with analogies.",
+            score=0.94,
+        )
+        progress_1 = _retrieved(
+            "progress_1",
+            intent="learning_progress",
+            content="PROGRESS: Alice completed loops and functions lessons.",
+            score=0.93,
+        )
+        pattern = _retrieved(
+            "pattern_1",
+            intent="inferred_learning_pattern",
+            content="PATTERN: Alice confuses list mutation and reassignment.",
+            score=0.92,
+        )
+        progress_2 = _retrieved(
+            "progress_2",
+            intent="learning_progress",
+            content="PROGRESS: Alice now understands classes and basic OOP.",
+            score=0.91,
+        )
+
+        selected = service._select_with_intent_caps(
+            [profile_1, profile_2, progress_1, pattern, progress_2],
+            top_k=4,
+            query="Alice now asks about structuring larger projects and architecture.",
+        )
+        selected_intents = [item.memory.intent for item in selected]
+        assert selected_intents.count("preference_stated") == 1
+        assert selected_intents.count("learning_progress") == 2
+        assert "inferred_learning_pattern" in selected_intents
+    finally:
+        service.close()
+
+
+def test_service_preserves_profile_density_for_style_queries(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        profile_1 = _retrieved(
+            "profile_a",
+            intent="preference_stated",
+            content="PROFILE: Alice prefers short explanations.",
+            score=0.95,
+        )
+        profile_2 = _retrieved(
+            "profile_b",
+            intent="preference_stated",
+            content="PROFILE: Alice learns with analogies.",
+            score=0.94,
+        )
+        profile_3 = _retrieved(
+            "profile_c",
+            intent="preference_stated",
+            content="PROFILE: Alice likes compact code snippets.",
+            score=0.93,
+        )
+        progress_1 = _retrieved(
+            "progress_a",
+            intent="learning_progress",
+            content="PROGRESS: Alice completed loops and functions lessons.",
+            score=0.92,
+        )
+
+        selected = service._select_with_intent_caps(
+            [profile_1, profile_2, profile_3, progress_1],
+            top_k=3,
+            query="How should tutoring responses be formatted for Alice?",
+        )
+        selected_intents = [item.memory.intent for item in selected]
+        assert selected_intents == [
+            "preference_stated",
+            "preference_stated",
+            "preference_stated",
+        ]
+    finally:
+        service.close()
+
+
 def test_service_health_degraded_on_storage_failure(tmp_path: Path) -> None:
     service = _service(tmp_path)
     try:

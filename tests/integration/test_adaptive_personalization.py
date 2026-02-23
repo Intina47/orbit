@@ -78,3 +78,63 @@ def test_feedback_creates_inferred_preference_memory(engine) -> None:
 
     assert len(preferences) >= 1
     assert "concise explanations" in preferences[-1].content.lower()
+
+
+def test_failed_attempts_create_recurring_failure_inference(engine) -> None:
+    attempts = [
+        "I failed again: TypeError when indexing a list with string keys.",
+        "Still failing with TypeError list indexing in Python.",
+        "Another wrong attempt: list index TypeError keeps happening.",
+    ]
+    for idx, description in enumerate(attempts):
+        _store_event(
+            engine,
+            Event(
+                timestamp=1_700_400_000 + idx,
+                entity_id="alice",
+                event_type="user_attempt",
+                description=description,
+                metadata={"intent": "user_attempt"},
+            ),
+        )
+
+    memories = engine.get_memory(entity_id="alice")
+    inferred = [
+        item
+        for item in memories
+        if item.intent == "inferred_learning_pattern"
+        and "repeatedly struggles with" in item.content.lower()
+    ]
+
+    assert len(inferred) == 1
+    assert "typeerror" in inferred[0].content.lower()
+
+
+def test_repeated_positive_assessments_create_progress_inference(engine) -> None:
+    outcomes = [
+        "Assessment passed: Alice correctly solved a Python class design task.",
+        "Assessment passed: Alice completed a module architecture exercise correctly.",
+        "Assessment passed: Alice solved project structure planning with the right approach.",
+    ]
+    for idx, description in enumerate(outcomes):
+        _store_event(
+            engine,
+            Event(
+                timestamp=1_700_500_000 + idx,
+                entity_id="alice",
+                event_type="assessment_result",
+                description=description,
+                metadata={"intent": "assessment_result"},
+            ),
+        )
+
+    memories = engine.get_memory(entity_id="alice")
+    inferred_progress = [
+        item
+        for item in memories
+        if item.intent == "learning_progress"
+        and item.content.lower().startswith("inferred progress:")
+    ]
+
+    assert len(inferred_progress) == 1
+    assert "has progressed" in inferred_progress[0].content.lower()

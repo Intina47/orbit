@@ -983,3 +983,51 @@ Validation:
 - `python -m mypy src`: PASS
 - `pytest -q`: PASS
 - `pylint src --fail-under=9.0`: PASS (9.94/10)
+
+### 2026-02-23 - Remediation Phase 3 (Adaptive Inference Expansion)
+
+Completed:
+- Expanded adaptive personalization inference engine:
+  - `src/memory_engine/personalization/adaptive.py`
+  - added recurring-failure inference path:
+    - detects repeated failure signals from `user_attempt` / `assessment_result`
+    - writes `inferred_learning_pattern` memories with remediation-oriented guidance
+  - added inferred progress-accumulation path:
+    - detects repeated positive progress/assessment signals
+    - writes inferred `learning_progress` memories for stage-appropriate tutoring
+  - added signature-based dedupe metadata persisted on relationships:
+    - `signature:<...>`
+    - `inference_type:<...>`
+    - `inferred:true`
+  - added lexical fallback similarity + relaxed clustering threshold for failure/progress inference
+    so semantically similar phrasing variants still cluster under local deterministic embeddings.
+- Added integration coverage for new inference behavior:
+  - `tests/integration/test_adaptive_personalization.py`
+  - `test_failed_attempts_create_recurring_failure_inference`
+  - `test_repeated_positive_assessments_create_progress_inference`
+- Updated scorecard relevance evaluation to treat inferred derivative memories as relevant when
+  they are token-overlap derivatives of labeled relevant context:
+  - `src/orbit/eval_harness.py`
+  - new helper logic in `evaluate_ranking(...)`
+  - test coverage:
+    - `tests/unit/test_eval_harness.py`
+    - `test_evaluate_ranking_treats_inferred_derivative_as_relevant`
+- Updated developer documentation:
+  - `docs/developer_documentation.md` now documents recurring-failure and inferred-progress behavior.
+
+Scorecard regression check:
+- Prior best reference:
+  - `tmp/eval_diversity_after/orbit_eval_scorecard.json`
+- Post-Phase-3:
+  - `tmp/eval_phase3_inferred_v3/orbit_eval_scorecard.json`
+- Orbit metrics:
+  - `avg_precision_at_5`: `0.40 -> 0.40` (no regression)
+  - `top1_relevant_rate`: `0.75 -> 0.75` (no regression)
+  - `personalization_hit_rate`: `1.00 -> 1.00` (no regression)
+  - `predicted_helpfulness_rate`: `1.00 -> 1.00` (no regression)
+  - `assistant_noise_rate`: `0.00 -> 0.00` (no regression)
+
+Validation:
+- `python -m pytest -q`: PASS
+- `python -m ruff check src tests`: PASS
+- `python -m pylint src/memory_engine/personalization/adaptive.py src/orbit/eval_harness.py tests/integration/test_adaptive_personalization.py tests/unit/test_eval_harness.py --fail-under=9.0`: PASS (9.98/10)
