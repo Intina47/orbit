@@ -872,3 +872,23 @@ Validation:
 - `pytest -q`: PASS
 - `python -m mypy src`: PASS
 - `pylint src --fail-under=9.0`: PASS (9.94/10)
+
+### 2026-02-23 - Packaging/Release Hardening (PyPI)
+
+Completed:
+- Tightened `pyproject.toml` package metadata under `[project]`:
+  - switched readme to `README.md` with explicit content type
+  - added maintainers, keywords, classifiers
+  - added project URLs (`Homepage`, `Repository`, `Documentation`, `Issues`)
+  - added console script entry point:
+    - `orbit-api = orbit_api.__main__:main`
+- Added GitHub Actions trusted-publishing workflow:
+  - `.github/workflows/publish-pypi.yml`
+  - triggers on `v*` tags and manual dispatch
+  - validates Git tag version matches `project.version`
+  - builds sdist/wheel and validates metadata
+  - publishes to PyPI using OIDC (`pypa/gh-action-pypi-publish`)
+
+Validation:
+- `python -m build`: PASS
+- `python -m ruff check src tests`: PASS

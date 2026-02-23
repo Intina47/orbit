@@ -2,9 +2,30 @@
 name = "orbit-memory"
 version = "0.1.0"
 description = "Intelligent-first memory decision engine for developers"
-readme = "BUILD_AND_SPEC.md"
+readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11,<4.0"
 authors = [{ name = "Memory Infrastructure Team" }]
+maintainers = [{ name = "Memory Infrastructure Team" }]
+keywords = [
+  "memory",
+  "llm",
+  "ai",
+  "retrieval",
+  "personalization",
+  "fastapi",
+  "developer-tools",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Framework :: FastAPI",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Typing :: Typed",
+]
 dependencies = [
   "alembic>=1.14,<2.0",
   "fastapi>=0.115,<1.0",
@@ -26,6 +47,15 @@ dependencies = [
   "torch>=2.6,<3.0",
   "uvicorn>=0.35,<1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Intina47/orbit"
+Repository = "https://github.com/Intina47/orbit"
+Documentation = "https://intina47.github.io/orbit/"
+Issues = "https://github.com/Intina47/orbit/issues"
+
+[project.scripts]
+orbit-api = "orbit_api.__main__:main"
 
 [dependency-groups]
 dev = [
