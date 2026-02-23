@@ -934,3 +934,52 @@ Validation:
 - `python -m mypy src`: PASS
 - `pytest -q tests/unit/test_eval_harness.py`: PASS
 - `python scripts/run_orbit_eval.py --output-dir tmp/eval_sample --sqlite-path tmp/orbit_eval.db`: PASS
+
+### 2026-02-23 - Remediation Phase 1/2 (Query-Intent Boost + Stale Suppression)
+
+Completed:
+- Implemented query-intent-aware reweighting in API retrieval path:
+  - `src/orbit_api/service.py`
+  - new `_reweight_ranked_by_query(...)` pass now runs after ranker output and before top-k intent caps
+  - **Phase 1** logic:
+    - boosts `inferred_learning_pattern` on mistake/error/repeat-focused queries
+    - lightly boosts `learning_progress` on those queries
+    - lightly downweights assistant intents for mistake-focused queries
+- Implemented stale-profile suppression when newer progress exists:
+  - `src/orbit_api/service.py`
+  - **Phase 2** logic:
+    - detects latest `learning_progress` memory with advancement signals
+    - downweights older stale profile memories (e.g. beginner/novice baseline statements) when newer progress exists
+    - uses stronger suppression for recency/current-state queries
+- Added focused unit tests:
+  - `tests/unit/test_orbit_api_service.py`
+    - `test_service_boosts_inferred_pattern_for_mistake_queries`
+    - `test_service_suppresses_stale_profile_when_newer_progress_exists`
+
+Scorecard Before/After (same eval workload):
+- Before artifact:
+  - `tmp/eval_before/orbit_eval_scorecard.json`
+- After artifact:
+  - `tmp/eval_after/orbit_eval_scorecard.json`
+
+Orbit metric deltas (after - before):
+- `avg_precision_at_5`: `+0.000` (0.35 -> 0.35)
+- `top1_relevant_rate`: `+0.500` (0.25 -> 0.75)
+- `personalization_hit_rate`: `+0.250` (0.75 -> 1.00)
+- `predicted_helpfulness_rate`: `+0.250` (0.75 -> 1.00)
+- `assistant_noise_rate`: `+0.000` (0.00 -> 0.00)
+- `stale_memory_rate`: `+0.000` (0.00 -> 0.00)
+
+Concrete retrieval ordering improvements:
+- Recurring-mistake query:
+  - before top-1: `preference_stated`
+  - after top-1: `inferred_learning_pattern`
+- Day-30 architecture query:
+  - before top-1: stale beginner profile
+  - after top-1: project-learning preference / current profile signals (stale beginner no longer top-ranked)
+
+Validation:
+- `python -m ruff check src tests scripts`: PASS
+- `python -m mypy src`: PASS
+- `pytest -q`: PASS
+- `pylint src --fail-under=9.0`: PASS (9.94/10)

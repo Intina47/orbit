@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -327,6 +328,11 @@ class OrbitApiService:
             end_time=request.time_range.end if request.time_range else None,
         )
         ranked = self._engine.ranker.rank(query_embedding, candidates, now=now)
+        ranked = self._reweight_ranked_by_query(
+            query=request.query,
+            ranked=ranked,
+            candidates=candidates,
+        )
         selected = self._select_with_intent_caps(ranked, top_k=request.limit)
         memories: list[Memory] = []
         for index, ranked_item in enumerate(selected, start=1):
@@ -563,6 +569,154 @@ class OrbitApiService:
                 continue
             output.append(record)
         return output
+
+    def _reweight_ranked_by_query(
+        self,
+        *,
+        query: str,
+        ranked: list[Any],
+        candidates: list[MemoryRecord],
+    ) -> list[Any]:
+        if not ranked:
+            return ranked
+        normalized_query = query.strip().lower()
+        mistake_focused = self._is_mistake_pattern_query(normalized_query)
+        recency_focused = self._is_recency_or_progress_query(normalized_query)
+        latest_progress = self._latest_progress_candidate(candidates)
+        has_advancement_signal = (
+            latest_progress is not None
+            and self._has_advancement_signal(latest_progress)
+        )
+
+        reweighted: list[Any] = []
+        for item in ranked:
+            intent = item.memory.intent.strip().lower()
+            multiplier = 1.0
+            if mistake_focused:
+                if intent == "inferred_learning_pattern":
+                    multiplier *= 1.9
+                elif intent == "learning_progress":
+                    multiplier *= 1.15
+                elif intent.startswith("assistant_"):
+                    multiplier *= 0.85
+
+            if (
+                has_advancement_signal
+                and latest_progress is not None
+                and self._is_stale_profile_memory(item.memory, latest_progress)
+            ):
+                multiplier *= 0.45 if recency_focused else 0.62
+
+            adjusted_score = max(0.0, min(item.rank_score * multiplier, 2.0))
+            reweighted.append(item.model_copy(update={"rank_score": adjusted_score}))
+
+        reweighted.sort(key=lambda item: item.rank_score, reverse=True)
+        return reweighted
+
+    @staticmethod
+    def _is_mistake_pattern_query(query: str) -> bool:
+        terms = _tokenize_query(query)
+        if not terms:
+            return False
+        triggers = {
+            "mistake",
+            "mistakes",
+            "error",
+            "errors",
+            "wrong",
+            "repeat",
+            "repeating",
+            "repeatedly",
+            "struggle",
+            "struggles",
+            "bug",
+            "bugs",
+            "confuse",
+            "confused",
+            "confusing",
+            "failing",
+            "fails",
+        }
+        if terms.intersection(triggers):
+            return True
+        return "keep" in terms and ("repeating" in terms or "repeat" in terms)
+
+    @staticmethod
+    def _is_recency_or_progress_query(query: str) -> bool:
+        terms = _tokenize_query(query)
+        if not terms:
+            return False
+        triggers = {
+            "now",
+            "current",
+            "latest",
+            "today",
+            "currently",
+            "progress",
+            "level",
+            "stage",
+            "right",
+            "recent",
+        }
+        return bool(terms.intersection(triggers))
+
+    @staticmethod
+    def _latest_progress_candidate(
+        candidates: list[MemoryRecord],
+    ) -> MemoryRecord | None:
+        progress_candidates = [
+            memory
+            for memory in candidates
+            if memory.intent.strip().lower() == "learning_progress"
+        ]
+        if not progress_candidates:
+            return None
+        return max(progress_candidates, key=lambda memory: memory.created_at)
+
+    @staticmethod
+    def _has_advancement_signal(memory: MemoryRecord) -> bool:
+        text = f"{memory.summary} {memory.content}".lower()
+        triggers = (
+            "completed",
+            "understands",
+            "intermediate",
+            "advanced",
+            "improving",
+            "progressed",
+            "now",
+            "mastered",
+            "comfortable",
+        )
+        return any(token in text for token in triggers)
+
+    @staticmethod
+    def _is_stale_profile_memory(
+        candidate: MemoryRecord,
+        latest_progress: MemoryRecord,
+    ) -> bool:
+        if candidate.created_at >= latest_progress.created_at:
+            return False
+        intent = candidate.intent.strip().lower()
+        if intent not in {
+            "preference_stated",
+            "user_profile",
+            "user_fact",
+            "inferred_preference",
+            "learning_progress",
+        }:
+            return False
+        text = f"{candidate.summary} {candidate.content}".lower()
+        stale_markers = (
+            "profile_old",
+            "absolute beginner",
+            "beginner",
+            "novice",
+            "new to coding",
+            "starting out",
+            "entry level",
+            "newbie",
+        )
+        return any(marker in text for marker in stale_markers)
 
     def _select_with_intent_caps(
         self,
@@ -1063,3 +1217,7 @@ class OrbitApiService:
         if not updates:
             return base
         return base.model_copy(update=updates)
+
+
+def _tokenize_query(query: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", query.lower()))

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from decision_engine.models import MemoryRecord, RetrievedMemory, StorageTier
 from memory_engine.config import EngineConfig
 from orbit.models import FeedbackRequest, IngestRequest, RetrieveRequest
 from orbit_api.config import ApiConfig
@@ -32,6 +34,37 @@ def _service(tmp_path: Path) -> OrbitApiService:
         ranker_training_batch_size=2,
     )
     return OrbitApiService(api_config=api_config, engine_config=engine_config)
+
+
+def _retrieved(
+    memory_id: str,
+    *,
+    intent: str,
+    content: str,
+    score: float,
+    age_days: float = 0.0,
+) -> RetrievedMemory:
+    now = datetime.now(UTC)
+    created_at = now - timedelta(days=age_days)
+    memory = MemoryRecord(
+        memory_id=memory_id,
+        event_id=f"event-{memory_id}",
+        content=content,
+        summary=content,
+        intent=intent,
+        entities=["alice"],
+        relationships=[],
+        raw_embedding=[0.1, 0.2],
+        semantic_embedding=[0.1, 0.2],
+        semantic_key=f"key-{memory_id}",
+        created_at=created_at,
+        updated_at=now,
+        retrieval_count=1,
+        avg_outcome_signal=0.0,
+        storage_tier=StorageTier.PERSISTENT,
+        latest_importance=0.8,
+    )
+    return RetrievedMemory(memory=memory, rank_score=score)
 
 
 def test_service_quota_enforcement(tmp_path: Path) -> None:
@@ -218,6 +251,68 @@ def test_service_idempotent_ingest_batch_replay(tmp_path: Path) -> None:
         assert replayed is True
         assert len(replay) == 2
         assert replay_snapshot.remaining == 0
+    finally:
+        service.close()
+
+
+def test_service_boosts_inferred_pattern_for_mistake_queries(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        assistant = _retrieved(
+            "assistant",
+            intent="assistant_response",
+            content="Long generic answer about python.",
+            score=0.72,
+        )
+        profile = _retrieved(
+            "profile",
+            intent="preference_stated",
+            content="Alice prefers short explanations.",
+            score=0.70,
+        )
+        pattern = _retrieved(
+            "pattern",
+            intent="inferred_learning_pattern",
+            content="PATTERN: Alice repeatedly confuses list mutation and reassignment.",
+            score=0.55,
+        )
+        reweighted = service._reweight_ranked_by_query(
+            query="What mistake does Alice keep repeating in Python?",
+            ranked=[assistant, profile, pattern],
+            candidates=[assistant.memory, profile.memory, pattern.memory],
+        )
+        assert reweighted[0].memory.intent == "inferred_learning_pattern"
+        assert reweighted[0].rank_score > reweighted[1].rank_score
+    finally:
+        service.close()
+
+
+def test_service_suppresses_stale_profile_when_newer_progress_exists(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    try:
+        stale_profile = _retrieved(
+            "stale_profile",
+            intent="preference_stated",
+            content="PROFILE_OLD: Alice is an absolute beginner in Python.",
+            score=0.78,
+            age_days=14.0,
+        )
+        fresh_progress = _retrieved(
+            "fresh_progress",
+            intent="learning_progress",
+            content="PROGRESS: Alice now understands classes and intermediate architecture.",
+            score=0.66,
+            age_days=0.1,
+        )
+        reweighted = service._reweight_ranked_by_query(
+            query="How should I help Alice now with project architecture?",
+            ranked=[stale_profile, fresh_progress],
+            candidates=[stale_profile.memory, fresh_progress.memory],
+        )
+        assert reweighted[0].memory.intent == "learning_progress"
+        assert reweighted[0].rank_score > reweighted[1].rank_score
     finally:
         service.close()
 
