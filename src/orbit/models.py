@@ -147,7 +147,7 @@ class RetrieveRequest(OrbitModel):
 
 
 class IngestBatchRequest(OrbitModel):
-    events: list[IngestRequest]
+    events: list[IngestRequest] = Field(min_length=1, max_length=100)
 
 
 class IngestBatchResponse(OrbitModel):
@@ -155,7 +155,7 @@ class IngestBatchResponse(OrbitModel):
 
 
 class FeedbackBatchRequest(OrbitModel):
-    feedback: list[FeedbackRequest]
+    feedback: list[FeedbackRequest] = Field(min_length=1, max_length=100)
 
 
 class FeedbackBatchResponse(OrbitModel):

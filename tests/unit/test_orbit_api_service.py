@@ -7,7 +7,11 @@ import pytest
 from memory_engine.config import EngineConfig
 from orbit.models import FeedbackRequest, IngestRequest, RetrieveRequest
 from orbit_api.config import ApiConfig
-from orbit_api.service import OrbitApiService, RateLimitExceededError
+from orbit_api.service import (
+    IdempotencyConflictError,
+    OrbitApiService,
+    RateLimitExceededError,
+)
 
 
 def _service(tmp_path: Path) -> OrbitApiService:
@@ -86,5 +90,148 @@ def test_service_feedback_missing_memory(tmp_path: Path) -> None:
     try:
         with pytest.raises(KeyError):
             service.feedback(FeedbackRequest(memory_id="missing", helpful=False))
+    finally:
+        service.close()
+
+
+def test_service_quota_persists_across_restart(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        first = service.consume_event_quota("acct_persist")
+        assert first.remaining == 1
+    finally:
+        service.close()
+
+    restarted = _service(tmp_path)
+    try:
+        second = restarted.consume_event_quota("acct_persist")
+        assert second.remaining == 0
+        with pytest.raises(RateLimitExceededError):
+            restarted.consume_event_quota("acct_persist")
+    finally:
+        restarted.close()
+
+
+def test_service_idempotent_ingest_replay_and_conflict(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    request = IngestRequest(
+        content="Alice prefers short explanations",
+        event_type="user_question",
+        entity_id="alice",
+    )
+    try:
+        first, first_snapshot, first_replayed = service.ingest_with_quota(
+            account_key="acct_idempotent",
+            request=request,
+            idempotency_key="ingest-1",
+        )
+        assert first_replayed is False
+        assert first_snapshot.remaining == 1
+
+        replay, replay_snapshot, replayed = service.ingest_with_quota(
+            account_key="acct_idempotent",
+            request=request,
+            idempotency_key="ingest-1",
+        )
+        assert replayed is True
+        assert replay.memory_id == first.memory_id
+        assert replay_snapshot.remaining == 1
+
+        with pytest.raises(IdempotencyConflictError):
+            service.ingest_with_quota(
+                account_key="acct_idempotent",
+                request=IngestRequest(
+                    content="Different payload",
+                    event_type="user_question",
+                    entity_id="alice",
+                ),
+                idempotency_key="ingest-1",
+            )
+
+        final_snapshot = service.consume_event_quota("acct_idempotent")
+        assert final_snapshot.remaining == 0
+    finally:
+        service.close()
+
+
+def test_service_idempotency_persists_across_restart(tmp_path: Path) -> None:
+    request = IngestRequest(
+        content="Persist idempotent response",
+        event_type="user_question",
+        entity_id="alice",
+    )
+    first_memory_id = ""
+    service = _service(tmp_path)
+    try:
+        first, _, _ = service.ingest_with_quota(
+            account_key="acct_replay",
+            request=request,
+            idempotency_key="persist-key",
+        )
+        first_memory_id = first.memory_id
+    finally:
+        service.close()
+
+    restarted = _service(tmp_path)
+    try:
+        replay, snapshot, replayed = restarted.ingest_with_quota(
+            account_key="acct_replay",
+            request=request,
+            idempotency_key="persist-key",
+        )
+        assert replayed is True
+        assert replay.memory_id == first_memory_id
+        assert snapshot.remaining == 1
+    finally:
+        restarted.close()
+
+
+def test_service_idempotent_ingest_batch_replay(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    events = [
+        IngestRequest(
+            content="batch event 1",
+            event_type="user_question",
+            entity_id="alice",
+        ),
+        IngestRequest(
+            content="batch event 2",
+            event_type="user_question",
+            entity_id="alice",
+        ),
+    ]
+    try:
+        first, first_snapshot, first_replayed = service.ingest_batch_with_quota(
+            account_key="acct_batch",
+            events=events,
+            idempotency_key="batch-1",
+        )
+        assert first_replayed is False
+        assert len(first) == 2
+        assert first_snapshot.remaining == 0
+
+        replay, replay_snapshot, replayed = service.ingest_batch_with_quota(
+            account_key="acct_batch",
+            events=events,
+            idempotency_key="batch-1",
+        )
+        assert replayed is True
+        assert len(replay) == 2
+        assert replay_snapshot.remaining == 0
+    finally:
+        service.close()
+
+
+def test_service_health_degraded_on_storage_failure(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        def failing_memory_count() -> int:
+            msg = "storage down"
+            raise RuntimeError(msg)
+
+        service._engine.memory_count = failing_memory_count  # type: ignore[method-assign]
+        health = service.health()
+        assert health["status"] == "degraded"
+        assert health["storage"] == "error"
     finally:
         service.close()

@@ -210,6 +210,7 @@ Auth:
 - Bearer JWT: `Authorization: Bearer <token>`
 - Required claims: `sub`, `iat`, `exp`, `iss`, `aud`
 - Optional required scope via `ORBIT_JWT_REQUIRED_SCOPE`
+- Optional write idempotency: `Idempotency-Key: <key>` on `POST` endpoints
 
 Endpoints:
 
@@ -229,6 +230,7 @@ Endpoints:
 ```bash
 curl -X POST http://localhost:8000/v1/ingest \
   -H "Authorization: Bearer <jwt-token>" \
+  -H "Idempotency-Key: ingest-alice-0001" \
   -H "Content-Type: application/json" \
   -d '{
     "content":"I keep confusing while loops and for loops",
@@ -249,6 +251,7 @@ curl "http://localhost:8000/v1/retrieve?query=What%20should%20I%20know%20about%2
 ```bash
 curl -X POST http://localhost:8000/v1/feedback \
   -H "Authorization: Bearer <jwt-token>" \
+  -H "Idempotency-Key: feedback-alice-0001" \
   -H "Content-Type: application/json" \
   -d '{"memory_id":"<memory-id>","helpful":true,"outcome_value":1.0}'
 ```
@@ -299,6 +302,7 @@ Provider selection:
 
 Auth:
 
+- `ORBIT_ENV` (`development|production`; production enforces non-default JWT secret)
 - `ORBIT_JWT_SECRET`
 - `ORBIT_JWT_ISSUER`
 - `ORBIT_JWT_AUDIENCE`
@@ -310,6 +314,14 @@ Rate limits:
 - `ORBIT_RATE_LIMIT_EVENTS_PER_DAY`
 - `ORBIT_RATE_LIMIT_QUERIES_PER_DAY`
 - `ORBIT_RATE_LIMIT_PER_MINUTE`
+- `ORBIT_MAX_INGEST_CONTENT_CHARS`
+- `ORBIT_MAX_QUERY_CHARS`
+- `ORBIT_MAX_BATCH_ITEMS`
+
+Persistence:
+
+- Quota counters are persisted in PostgreSQL table `api_account_usage`
+- Idempotent write state/replay cache is persisted in PostgreSQL table `api_idempotency`
 
 Observability:
 
@@ -369,6 +381,7 @@ Rate limit headers:
 - `X-RateLimit-Remaining`
 - `X-RateLimit-Reset`
 - `Retry-After` on `429`
+- `X-Idempotency-Replayed` on write endpoints (`true|false`)
 
 ## Troubleshooting
 
@@ -382,6 +395,10 @@ Rate limit headers:
 
 - Respect `Retry-After`.
 - reduce call rate or increase configured limits.
+
+409 Conflict:
+
+- Same `Idempotency-Key` was reused with a different payload.
 
 No personalization:
 

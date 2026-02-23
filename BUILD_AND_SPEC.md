@@ -728,3 +728,99 @@ Validation:
 - `cd integrations/openclaw-memory && npm run build`: PASS
 - `cd integrations/openclaw-memory && npm run validate`: PASS
 - `cd integrations/openclaw-memory && npm install`: PASS (0 vulnerabilities)
+
+### 2026-02-23 - Infrastructure Hardening (API Guardrails + Durable Quota State)
+
+Completed:
+- Hardened Orbit API runtime config:
+  - Added environment-aware auth and guardrail settings in `src/orbit_api/config.py`:
+    - `ORBIT_ENV` (`development|production`)
+    - `ORBIT_MAX_INGEST_CONTENT_CHARS`
+    - `ORBIT_MAX_QUERY_CHARS`
+    - `ORBIT_MAX_BATCH_ITEMS`
+    - `ORBIT_USAGE_STATE_PATH`
+  - Added strict validation:
+    - Reject `jwt_algorithm=none`
+    - Enforce non-default `ORBIT_JWT_SECRET` in production (`ORBIT_ENV=production`)
+    - Positive-integer validation for runtime limits
+- Tightened request-level API protection in `src/orbit_api/app.py`:
+  - Ingest content size hard limit enforcement
+  - Retrieve query max-length enforcement
+  - Batch request limits:
+    - non-empty enforcement
+    - max item count enforcement
+    - per-event ingest content cap validation for ingest batches
+- Hardened service state handling in `src/orbit_api/service.py`:
+  - Added thread-safe lock for shared mutable state (`_usage_by_key`, metrics, latest ingestion)
+  - Added optional durable quota persistence across restarts:
+    - load on startup from `ORBIT_USAGE_STATE_PATH`
+    - persist on quota updates and shutdown
+    - tolerant parsing for malformed usage state files
+  - Improved health semantics:
+    - `/v1/health` now verifies storage readiness via `memory_count()`
+    - returns degraded state with detail on storage failure
+- Added model-level batch constraints in `src/orbit/models.py`:
+  - `IngestBatchRequest.events`: min 1, max 100
+  - `FeedbackBatchRequest.feedback`: min 1, max 100
+- Updated operator documentation:
+  - `.env.example` includes new hardening env vars
+  - `docs/developer_documentation.md` configuration reference updated
+
+Tests Added/Updated:
+- `tests/unit/test_orbit_config_and_entrypoint.py`:
+  - env parsing for new config fields
+  - production default-secret rejection
+  - JWT `none` algorithm rejection
+- `tests/unit/test_orbit_api_service.py`:
+  - durable quota persistence across service restart
+  - degraded health behavior on storage failure
+- `tests/integration/test_orbit_api_errors.py`:
+  - empty ingest batch rejected
+  - oversized ingest batch rejected
+  - overlong retrieve query rejected
+
+Validation:
+- `python -m ruff check src tests`: PASS
+- `pytest -q`: PASS
+- `pylint src --fail-under=9.0`: PASS (9.95/10)
+- `python -m mypy src`: PASS
+
+### 2026-02-23 - Phase 1 Hardening (PostgreSQL-Backed Quota + Idempotency)
+
+Completed:
+- Replaced file-backed API quota state with database-backed transactional state:
+  - Added `ApiAccountUsageRow` model in `src/memory_engine/storage/db.py`
+  - Added Alembic migration `migrations/versions/20260223_0002_create_api_state_tables.py`
+  - `OrbitApiService` now consumes quota through DB transactions in `api_account_usage`
+- Implemented idempotent write execution with payload hashing and replay cache:
+  - Added `ApiIdempotencyRow` model + migration table `api_idempotency`
+  - Added request hash conflict detection (same key + different payload -> conflict)
+  - Added replay support for successful duplicates (same key + same payload)
+  - Added pending idempotency cleanup on write failure paths
+- Wired idempotency into API endpoints:
+  - `POST /v1/ingest`
+  - `POST /v1/feedback`
+  - `POST /v1/ingest/batch`
+  - `POST /v1/feedback/batch`
+  - Added `Idempotency-Key` header support
+  - Added `X-Idempotency-Replayed: true|false` response header
+  - Added `409 Conflict` behavior for key/payload mismatch or in-progress reuse
+- Removed obsolete file-backed quota environment setting:
+  - removed `ORBIT_USAGE_STATE_PATH` from runtime configuration and `.env.example`
+
+Tests Added/Updated:
+- `tests/unit/test_orbit_api_service.py`:
+  - idempotent ingest replay + conflict path
+  - idempotency persistence across service restart
+  - idempotent ingest batch replay path
+- `tests/integration/test_orbit_api_errors.py`:
+  - API-level ingest replay + conflict validation
+  - API-level feedback replay + conflict validation
+- `tests/unit/test_orbit_config_and_entrypoint.py`:
+  - removed deprecated `ORBIT_USAGE_STATE_PATH` expectations
+
+Validation:
+- `python -m ruff check src tests`: PASS
+- `pytest -q`: PASS
+- `python -m mypy src`: PASS
+- `pylint src --fail-under=9.0`: PASS (9.94/10)

@@ -2,18 +2,26 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
+from threading import RLock
 from time import perf_counter
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
+from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, sessionmaker
 
 from decision_engine.models import MemoryRecord
 from memory_engine.config import EngineConfig
 from memory_engine.engine import DecisionEngine
 from memory_engine.models.event import Event
+from memory_engine.storage.db import ApiAccountUsageRow, ApiIdempotencyRow, Base
 from orbit.models import (
     AccountQuota,
     AccountUsage,
@@ -30,16 +38,6 @@ from orbit.models import (
 )
 from orbit_api.auth import AuthContext
 from orbit_api.config import ApiConfig
-
-
-@dataclass
-class UsageState:
-    day_bucket: date
-    month_bucket: tuple[int, int]
-    events_today: int = 0
-    queries_today: int = 0
-    events_month: int = 0
-    queries_month: int = 0
 
 
 @dataclass
@@ -65,6 +63,20 @@ class RateLimitExceededError(RuntimeError):
         self.retry_after_seconds = retry_after_seconds
 
 
+class IdempotencyConflictError(RuntimeError):
+    """Raised when an idempotency key is reused with a different payload."""
+
+
+ResponseT = TypeVar("ResponseT")
+
+
+@dataclass
+class _StoredReplay:
+    response_payload: dict[str, Any]
+    snapshot: RateLimitSnapshot
+    status_code: int
+
+
 class OrbitApiService:
     """Maps API contract objects to core memory engine operations."""
 
@@ -79,7 +91,25 @@ class OrbitApiService:
         self._engine = engine or DecisionEngine(
             config=resolved_engine_config,
         )
-        self._usage_by_key: dict[str, UsageState] = {}
+        connect_args = (
+            {"check_same_thread": False}
+            if self._config.database_url.startswith("sqlite")
+            else {}
+        )
+        self._state_engine = create_engine(
+            self._config.database_url,
+            future=True,
+            pool_pre_ping=True,
+            connect_args=connect_args,
+        )
+        Base.metadata.create_all(self._state_engine)
+        self._state_session_factory = sessionmaker(
+            bind=self._state_engine,
+            autoflush=False,
+            autocommit=False,
+            future=True,
+        )
+        self._state_lock = RLock()
         self._latest_ingestion: datetime | None = None
         self._started_at = datetime.now(UTC)
         self._metrics: dict[str, float] = {
@@ -96,6 +126,7 @@ class OrbitApiService:
         return self._config
 
     def close(self) -> None:
+        self._state_engine.dispose()
         self._engine.close()
 
     def consume_event_quota(
@@ -107,6 +138,97 @@ class OrbitApiService:
         self, account_key: str, amount: int = 1
     ) -> RateLimitSnapshot:
         return self._consume_quota(account_key, kind="query", amount=amount)
+
+    def ingest_with_quota(
+        self,
+        *,
+        account_key: str,
+        request: IngestRequest,
+        idempotency_key: str | None,
+    ) -> tuple[IngestResponse, RateLimitSnapshot, bool]:
+        return self._execute_write_operation(
+            account_key=account_key,
+            operation="ingest",
+            idempotency_key=idempotency_key,
+            payload=request.model_dump(mode="json"),
+            quota_kind="event",
+            quota_amount=1,
+            execute=lambda: self.ingest(request),
+            serialize=lambda response: response.model_dump(mode="json"),
+            deserialize=IngestResponse.model_validate,
+            status_code=201,
+        )
+
+    def feedback_with_quota(
+        self,
+        *,
+        account_key: str,
+        request: FeedbackRequest,
+        idempotency_key: str | None,
+    ) -> tuple[FeedbackResponse, RateLimitSnapshot, bool]:
+        return self._execute_write_operation(
+            account_key=account_key,
+            operation="feedback",
+            idempotency_key=idempotency_key,
+            payload=request.model_dump(mode="json"),
+            quota_kind="event",
+            quota_amount=1,
+            execute=lambda: self.feedback(request),
+            serialize=lambda response: response.model_dump(mode="json"),
+            deserialize=FeedbackResponse.model_validate,
+            status_code=200,
+        )
+
+    def ingest_batch_with_quota(
+        self,
+        *,
+        account_key: str,
+        events: list[IngestRequest],
+        idempotency_key: str | None,
+    ) -> tuple[list[IngestResponse], RateLimitSnapshot, bool]:
+        payload = [item.model_dump(mode="json") for item in events]
+        return self._execute_write_operation(
+            account_key=account_key,
+            operation="ingest_batch",
+            idempotency_key=idempotency_key,
+            payload=payload,
+            quota_kind="event",
+            quota_amount=len(events),
+            execute=lambda: self.ingest_batch(events),
+            serialize=lambda responses: {
+                "items": [item.model_dump(mode="json") for item in responses]
+            },
+            deserialize=lambda data: [
+                IngestResponse.model_validate(item) for item in data.get("items", [])
+            ],
+            status_code=200,
+        )
+
+    def feedback_batch_with_quota(
+        self,
+        *,
+        account_key: str,
+        feedback: list[FeedbackRequest],
+        idempotency_key: str | None,
+    ) -> tuple[list[FeedbackResponse], RateLimitSnapshot, bool]:
+        payload = [item.model_dump(mode="json") for item in feedback]
+        return self._execute_write_operation(
+            account_key=account_key,
+            operation="feedback_batch",
+            idempotency_key=idempotency_key,
+            payload=payload,
+            quota_kind="event",
+            quota_amount=len(feedback),
+            execute=lambda: self.feedback_batch(feedback),
+            serialize=lambda responses: {
+                "items": [item.model_dump(mode="json") for item in responses]
+            },
+            deserialize=lambda data: [
+                FeedbackResponse.model_validate(item)
+                for item in data.get("items", [])
+            ],
+            status_code=200,
+        )
 
     def ingest(self, request: IngestRequest) -> IngestResponse:
         start = perf_counter()
@@ -132,9 +254,10 @@ class OrbitApiService:
             else f"Discarded by policy: {decision.rationale}"
         )
 
-        self._latest_ingestion = datetime.now(UTC)
-        self._metrics["ingest_requests_total"] += 1
-        self._metrics["ingest_latency_ms_sum"] += latency_ms
+        with self._state_lock:
+            self._latest_ingestion = datetime.now(UTC)
+            self._metrics["ingest_requests_total"] += 1
+            self._metrics["ingest_latency_ms_sum"] += latency_ms
 
         return IngestResponse(
             memory_id=memory_id,
@@ -217,8 +340,9 @@ class OrbitApiService:
             )
 
         query_execution_time_ms = (perf_counter() - start) * 1000.0
-        self._metrics["retrieve_requests_total"] += 1
-        self._metrics["retrieve_latency_ms_sum"] += query_execution_time_ms
+        with self._state_lock:
+            self._metrics["retrieve_requests_total"] += 1
+            self._metrics["retrieve_latency_ms_sum"] += query_execution_time_ms
 
         applied_filters: dict[str, str] = {}
         if request.entity_id:
@@ -257,8 +381,9 @@ class OrbitApiService:
         )
 
         latency_ms = (perf_counter() - start) * 1000.0
-        self._metrics["feedback_requests_total"] += 1
-        self._metrics["feedback_latency_ms_sum"] += latency_ms
+        with self._state_lock:
+            self._metrics["feedback_requests_total"] += 1
+            self._metrics["feedback_latency_ms_sum"] += latency_ms
 
         impact = (
             "Positive signal recorded. This will improve ranking for similar queries."
@@ -276,10 +401,25 @@ class OrbitApiService:
         return [self.feedback(item) for item in feedback]
 
     def status(self, account_key: str) -> StatusResponse:
-        usage = self._usage_by_key.get(account_key)
+        now = datetime.now(UTC)
+        with self._state_lock:
+            latest_ingestion = self._latest_ingestion
+        usage = self._read_usage_row(account_key)
         storage_mb = self._storage_usage_mb()
-        events_month = usage.events_month if usage else 0
-        queries_month = usage.queries_month if usage else 0
+        events_month = (
+            usage.events_month
+            if usage
+            and usage.month_year == now.year
+            and usage.month_value == now.month
+            else 0
+        )
+        queries_month = (
+            usage.queries_month
+            if usage
+            and usage.month_year == now.year
+            and usage.month_value == now.month
+            else 0
+        )
         return StatusResponse(
             connected=True,
             api_version=self._config.api_version,
@@ -292,27 +432,44 @@ class OrbitApiService:
                     queries_per_day=self._config.free_queries_per_day,
                 ),
             ),
-            latest_ingestion=self._latest_ingestion,
+            latest_ingestion=latest_ingestion,
             uptime_percent=self._config.uptime_percent,
         )
 
     def health(self) -> dict[str, str]:
-        return {"status": "ok", "version": self._config.api_version}
+        try:
+            self._engine.memory_count()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            return {
+                "status": "degraded",
+                "version": self._config.api_version,
+                "storage": "error",
+                "detail": str(exc),
+            }
+        return {
+            "status": "ok",
+            "version": self._config.api_version,
+            "storage": "ok",
+        }
 
     def validate_token(self, auth: AuthContext) -> AuthValidationResponse:
         return AuthValidationResponse(valid=True, scopes=auth.scopes)
 
     def metrics_text(self) -> str:
+        with self._state_lock:
+            ingest_total = self._metrics["ingest_requests_total"]
+            retrieve_total = self._metrics["retrieve_requests_total"]
+            feedback_total = self._metrics["feedback_requests_total"]
         lines = [
             "# HELP orbit_ingest_requests_total Total ingest requests.",
             "# TYPE orbit_ingest_requests_total counter",
-            f"orbit_ingest_requests_total {self._metrics['ingest_requests_total']:.0f}",
+            f"orbit_ingest_requests_total {ingest_total:.0f}",
             "# HELP orbit_retrieve_requests_total Total retrieve requests.",
             "# TYPE orbit_retrieve_requests_total counter",
-            f"orbit_retrieve_requests_total {self._metrics['retrieve_requests_total']:.0f}",
+            f"orbit_retrieve_requests_total {retrieve_total:.0f}",
             "# HELP orbit_feedback_requests_total Total feedback requests.",
             "# TYPE orbit_feedback_requests_total counter",
-            f"orbit_feedback_requests_total {self._metrics['feedback_requests_total']:.0f}",
+            f"orbit_feedback_requests_total {feedback_total:.0f}",
             "# HELP orbit_uptime_seconds Process uptime in seconds.",
             "# TYPE orbit_uptime_seconds gauge",
             f"orbit_uptime_seconds {self._uptime_seconds():.3f}",
@@ -494,21 +651,49 @@ class OrbitApiService:
     def _consume_quota(
         self, account_key: str, kind: str, amount: int
     ) -> RateLimitSnapshot:
-        now = datetime.now(UTC)
-        state = self._usage_by_key.setdefault(
-            account_key,
-            UsageState(
+        with self._state_session_factory() as session, session.begin():
+            return self._consume_quota_with_session(
+                session=session,
+                account_key=account_key,
+                kind=kind,
+                amount=amount,
+                now=datetime.now(UTC),
+            )
+
+    def _consume_quota_with_session(
+        self,
+        *,
+        session: Session,
+        account_key: str,
+        kind: str,
+        amount: int,
+        now: datetime,
+    ) -> RateLimitSnapshot:
+        if amount <= 0:
+            msg = "amount must be > 0"
+            raise ValueError(msg)
+        usage = self._select_usage_row_for_update(session=session, account_key=account_key)
+        if usage is None:
+            usage = ApiAccountUsageRow(
+                account_key=account_key,
                 day_bucket=now.date(),
-                month_bucket=(now.year, now.month),
-            ),
-        )
-        self._roll_usage_window(state, now)
+                month_year=now.year,
+                month_value=now.month,
+                events_today=0,
+                queries_today=0,
+                events_month=0,
+                queries_month=0,
+                updated_at=now,
+            )
+            session.add(usage)
+        self._roll_usage_window(usage=usage, now=now)
+
         if kind == "event":
             limit = self._config.free_events_per_day
-            used = state.events_today
+            used = usage.events_today
         else:
             limit = self._config.free_queries_per_day
-            used = state.queries_today
+            used = usage.queries_today
 
         if used + amount > limit:
             snapshot = RateLimitSnapshot(
@@ -518,36 +703,37 @@ class OrbitApiService:
             )
             retry_after = max(snapshot.reset_epoch - int(now.timestamp()), 1)
             raise RateLimitExceededError(
-                snapshot=snapshot, retry_after_seconds=retry_after
+                snapshot=snapshot,
+                retry_after_seconds=retry_after,
             )
 
         if kind == "event":
-            state.events_today += amount
-            state.events_month += amount
+            usage.events_today += amount
+            usage.events_month += amount
+            remaining = max(limit - usage.events_today, 0)
         else:
-            state.queries_today += amount
-            state.queries_month += amount
+            usage.queries_today += amount
+            usage.queries_month += amount
+            remaining = max(limit - usage.queries_today, 0)
+        usage.updated_at = now
 
-        remaining = limit - (
-            state.events_today if kind == "event" else state.queries_today
-        )
         return RateLimitSnapshot(
             limit=limit,
-            remaining=max(remaining, 0),
+            remaining=remaining,
             reset_epoch=self._next_day_reset_epoch(now),
         )
 
     @staticmethod
-    def _roll_usage_window(state: UsageState, now: datetime) -> None:
-        if state.day_bucket != now.date():
-            state.day_bucket = now.date()
-            state.events_today = 0
-            state.queries_today = 0
-        month_key = (now.year, now.month)
-        if state.month_bucket != month_key:
-            state.month_bucket = month_key
-            state.events_month = 0
-            state.queries_month = 0
+    def _roll_usage_window(usage: ApiAccountUsageRow, now: datetime) -> None:
+        if usage.day_bucket != now.date():
+            usage.day_bucket = now.date()
+            usage.events_today = 0
+            usage.queries_today = 0
+        if usage.month_year != now.year or usage.month_value != now.month:
+            usage.month_year = now.year
+            usage.month_value = now.month
+            usage.events_month = 0
+            usage.queries_month = 0
 
     @staticmethod
     def _next_day_reset_epoch(now: datetime) -> int:
@@ -559,6 +745,294 @@ class OrbitApiService:
         )
         next_day = next_day.replace(hour=0, minute=0, second=0, microsecond=0)
         return int(next_day.timestamp()) + 86400
+
+    def _read_usage_row(self, account_key: str) -> ApiAccountUsageRow | None:
+        with self._state_session_factory() as session:
+            stmt = select(ApiAccountUsageRow).where(
+                ApiAccountUsageRow.account_key == account_key
+            )
+            return session.execute(stmt).scalar_one_or_none()
+
+    def _select_usage_row_for_update(
+        self,
+        *,
+        session: Session,
+        account_key: str,
+    ) -> ApiAccountUsageRow | None:
+        stmt = (
+            select(ApiAccountUsageRow)
+            .where(ApiAccountUsageRow.account_key == account_key)
+            .with_for_update()
+        )
+        return session.execute(stmt).scalar_one_or_none()
+
+    def _execute_write_operation(
+        self,
+        *,
+        account_key: str,
+        operation: str,
+        idempotency_key: str | None,
+        payload: Any,
+        quota_kind: str,
+        quota_amount: int,
+        execute: Callable[[], ResponseT],
+        serialize: Callable[[ResponseT], dict[str, Any]],
+        deserialize: Callable[[dict[str, Any]], ResponseT],
+        status_code: int,
+    ) -> tuple[ResponseT, RateLimitSnapshot, bool]:
+        if idempotency_key is None:
+            snapshot = self._consume_quota(
+                account_key=account_key,
+                kind=quota_kind,
+                amount=quota_amount,
+            )
+            return execute(), snapshot, False
+
+        normalized_key = self._normalize_idempotency_key(idempotency_key)
+        request_hash = self._payload_hash(payload)
+        snapshot, replay = self._reserve_idempotency_slot(
+            account_key=account_key,
+            operation=operation,
+            idempotency_key=normalized_key,
+            request_hash=request_hash,
+            quota_kind=quota_kind,
+            quota_amount=quota_amount,
+        )
+        if replay is not None:
+            return deserialize(replay.response_payload), replay.snapshot, True
+
+        try:
+            result = execute()
+        except Exception:
+            self._release_pending_idempotency(
+                account_key=account_key,
+                operation=operation,
+                idempotency_key=normalized_key,
+                request_hash=request_hash,
+            )
+            raise
+
+        self._persist_idempotent_response(
+            account_key=account_key,
+            operation=operation,
+            idempotency_key=normalized_key,
+            request_hash=request_hash,
+            response_payload=serialize(result),
+            status_code=status_code,
+            snapshot=snapshot,
+        )
+        return result, snapshot, False
+
+    def _reserve_idempotency_slot(
+        self,
+        *,
+        account_key: str,
+        operation: str,
+        idempotency_key: str,
+        request_hash: str,
+        quota_kind: str,
+        quota_amount: int,
+    ) -> tuple[RateLimitSnapshot, _StoredReplay | None]:
+        for _ in range(3):
+            try:
+                with self._state_session_factory() as session, session.begin():
+                    replay = self._lookup_existing_replay(
+                        session=session,
+                        account_key=account_key,
+                        operation=operation,
+                        idempotency_key=idempotency_key,
+                        request_hash=request_hash,
+                    )
+                    if replay is not None:
+                        return replay.snapshot, replay
+                    now = datetime.now(UTC)
+                    session.add(
+                        ApiIdempotencyRow(
+                            account_key=account_key,
+                            operation=operation,
+                            idempotency_key=idempotency_key,
+                            request_hash=request_hash,
+                            response_json=None,
+                            status_code=None,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+                    session.flush()
+                    snapshot = self._consume_quota_with_session(
+                        session=session,
+                        account_key=account_key,
+                        kind=quota_kind,
+                        amount=quota_amount,
+                        now=now,
+                    )
+                    return snapshot, None
+            except IntegrityError:
+                continue
+        msg = "Unable to reserve idempotency key due to concurrent writes"
+        raise RuntimeError(msg)
+
+    def _lookup_existing_replay(
+        self,
+        *,
+        session: Session,
+        account_key: str,
+        operation: str,
+        idempotency_key: str,
+        request_hash: str,
+    ) -> _StoredReplay | None:
+        row = self._select_idempotency_row_for_update(
+            session=session,
+            account_key=account_key,
+            operation=operation,
+            idempotency_key=idempotency_key,
+        )
+        if row is None:
+            return None
+        if row.request_hash != request_hash:
+            msg = "Idempotency key reused with a different payload"
+            raise IdempotencyConflictError(msg)
+        if row.response_json is None or row.status_code is None:
+            msg = "Request with this idempotency key is still in progress"
+            raise IdempotencyConflictError(msg)
+        return self._deserialize_replay_payload(
+            response_json=row.response_json,
+            status_code=row.status_code,
+        )
+
+    def _persist_idempotent_response(
+        self,
+        *,
+        account_key: str,
+        operation: str,
+        idempotency_key: str,
+        request_hash: str,
+        response_payload: dict[str, Any],
+        status_code: int,
+        snapshot: RateLimitSnapshot,
+    ) -> None:
+        with self._state_session_factory() as session, session.begin():
+            row = self._select_idempotency_row_for_update(
+                session=session,
+                account_key=account_key,
+                operation=operation,
+                idempotency_key=idempotency_key,
+            )
+            if row is None:
+                return
+            if row.request_hash != request_hash:
+                msg = "Idempotency key reused with a different payload"
+                raise IdempotencyConflictError(msg)
+            if row.response_json is not None:
+                return
+            row.response_json = self._serialize_replay_payload(
+                response_payload=response_payload,
+                snapshot=snapshot,
+            )
+            row.status_code = status_code
+            row.updated_at = datetime.now(UTC)
+
+    def _release_pending_idempotency(
+        self,
+        *,
+        account_key: str,
+        operation: str,
+        idempotency_key: str,
+        request_hash: str,
+    ) -> None:
+        with self._state_session_factory() as session, session.begin():
+            row = self._select_idempotency_row_for_update(
+                session=session,
+                account_key=account_key,
+                operation=operation,
+                idempotency_key=idempotency_key,
+            )
+            if row is None:
+                return
+            if row.request_hash != request_hash:
+                return
+            if row.response_json is not None:
+                return
+            session.delete(row)
+
+    def _select_idempotency_row_for_update(
+        self,
+        *,
+        session: Session,
+        account_key: str,
+        operation: str,
+        idempotency_key: str,
+    ) -> ApiIdempotencyRow | None:
+        stmt = (
+            select(ApiIdempotencyRow)
+            .where(ApiIdempotencyRow.account_key == account_key)
+            .where(ApiIdempotencyRow.operation == operation)
+            .where(ApiIdempotencyRow.idempotency_key == idempotency_key)
+            .with_for_update()
+        )
+        return session.execute(stmt).scalar_one_or_none()
+
+    @staticmethod
+    def _serialize_replay_payload(
+        *,
+        response_payload: dict[str, Any],
+        snapshot: RateLimitSnapshot,
+    ) -> str:
+        payload = {
+            "response": response_payload,
+            "rate_limit": {
+                "limit": snapshot.limit,
+                "remaining": snapshot.remaining,
+                "reset_epoch": snapshot.reset_epoch,
+            },
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+    @staticmethod
+    def _deserialize_replay_payload(
+        *,
+        response_json: str,
+        status_code: int,
+    ) -> _StoredReplay:
+        parsed = json.loads(response_json)
+        if not isinstance(parsed, dict):
+            msg = "Stored idempotency payload is malformed"
+            raise RuntimeError(msg)
+        response = parsed.get("response")
+        if not isinstance(response, dict):
+            msg = "Stored idempotency response is malformed"
+            raise RuntimeError(msg)
+        raw_snapshot = parsed.get("rate_limit")
+        if not isinstance(raw_snapshot, dict):
+            snapshot = RateLimitSnapshot(limit=0, remaining=0, reset_epoch=0)
+        else:
+            snapshot = RateLimitSnapshot(
+                limit=max(int(raw_snapshot.get("limit", 0)), 0),
+                remaining=max(int(raw_snapshot.get("remaining", 0)), 0),
+                reset_epoch=max(int(raw_snapshot.get("reset_epoch", 0)), 0),
+            )
+        return _StoredReplay(
+            response_payload=response,
+            snapshot=snapshot,
+            status_code=status_code,
+        )
+
+    @staticmethod
+    def _normalize_idempotency_key(value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            msg = "Idempotency-Key header cannot be empty"
+            raise ValueError(msg)
+        if len(normalized) > 128:
+            msg = "Idempotency-Key header cannot exceed 128 characters"
+            raise ValueError(msg)
+        return normalized
+
+    @staticmethod
+    def _payload_hash(payload: Any) -> str:
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        digest = hashlib.sha256(canonical.encode("utf-8"))
+        return digest.hexdigest()
 
     def _storage_usage_mb(self) -> float:
         storage = self._engine.storage

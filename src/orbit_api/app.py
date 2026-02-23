@@ -5,7 +5,16 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Annotated, cast
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -34,7 +43,12 @@ from orbit.models import (
 )
 from orbit_api.auth import AuthContext, require_auth_context
 from orbit_api.config import ApiConfig
-from orbit_api.service import OrbitApiService, RateLimitExceededError, RateLimitSnapshot
+from orbit_api.service import (
+    IdempotencyConflictError,
+    OrbitApiService,
+    RateLimitExceededError,
+    RateLimitSnapshot,
+)
 from orbit_api.telemetry import configure_telemetry
 
 _security = HTTPBearer(auto_error=False)
@@ -106,14 +120,36 @@ def create_app(
         response: Response,
         service: Annotated[OrbitApiService, Depends(get_service)],
         auth: Annotated[AuthContext, Depends(get_auth_context)],
+        idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     ) -> IngestResponse:
-        snapshot = _consume_or_raise(
-            service.consume_event_quota,
-            account_key=auth.subject,
-            amount=1,
-        )
-        result = service.ingest(payload)
+        if len(payload.content) > config.max_ingest_content_chars:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"content exceeds ORBIT_MAX_INGEST_CONTENT_CHARS="
+                    f"{config.max_ingest_content_chars}"
+                ),
+            )
+        try:
+            result, snapshot, replayed = service.ingest_with_quota(
+                account_key=auth.subject,
+                request=payload,
+                idempotency_key=idempotency_key,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        except IdempotencyConflictError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        except RateLimitExceededError as exc:
+            raise _rate_limit_exception(exc) from exc
         _apply_rate_headers(response, snapshot)
+        response.headers["X-Idempotency-Replayed"] = "true" if replayed else "false"
         log.info(
             "ingest",
             account=auth.subject,
@@ -130,7 +166,7 @@ def create_app(
         response: Response,
         service: Annotated[OrbitApiService, Depends(get_service)],
         auth: Annotated[AuthContext, Depends(get_auth_context)],
-        query: Annotated[str, Query(min_length=1)],
+        query: Annotated[str, Query(min_length=1, max_length=config.max_query_chars)],
         limit_count: Annotated[int, Query(alias="limit", ge=1, le=100)] = 10,
         entity_id: str | None = None,
         event_type: str | None = None,
@@ -167,20 +203,33 @@ def create_app(
         response: Response,
         service: Annotated[OrbitApiService, Depends(get_service)],
         auth: Annotated[AuthContext, Depends(get_auth_context)],
+        idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     ) -> FeedbackResponse:
-        snapshot = _consume_or_raise(
-            service.consume_event_quota,
-            account_key=auth.subject,
-            amount=1,
-        )
         try:
-            result = service.feedback(payload)
+            result, snapshot, replayed = service.feedback_with_quota(
+                account_key=auth.subject,
+                request=payload,
+                idempotency_key=idempotency_key,
+            )
         except KeyError as exc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=str(exc),
             ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        except IdempotencyConflictError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        except RateLimitExceededError as exc:
+            raise _rate_limit_exception(exc) from exc
         _apply_rate_headers(response, snapshot)
+        response.headers["X-Idempotency-Replayed"] = "true" if replayed else "false"
         log.info(
             "feedback",
             account=auth.subject,
@@ -197,14 +246,49 @@ def create_app(
         response: Response,
         service: Annotated[OrbitApiService, Depends(get_service)],
         auth: Annotated[AuthContext, Depends(get_auth_context)],
+        idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     ) -> IngestBatchResponse:
-        snapshot = _consume_or_raise(
-            service.consume_event_quota,
-            account_key=auth.subject,
-            amount=len(payload.events),
-        )
-        items = service.ingest_batch(payload.events)
+        if not payload.events:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="events batch cannot be empty",
+            )
+        if len(payload.events) > config.max_batch_items:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"events batch exceeds ORBIT_MAX_BATCH_ITEMS={config.max_batch_items}",
+            )
+        if any(
+            len(item.content) > config.max_ingest_content_chars
+            for item in payload.events
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"one or more events exceed ORBIT_MAX_INGEST_CONTENT_CHARS="
+                    f"{config.max_ingest_content_chars}"
+                ),
+            )
+        try:
+            items, snapshot, replayed = service.ingest_batch_with_quota(
+                account_key=auth.subject,
+                events=payload.events,
+                idempotency_key=idempotency_key,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        except IdempotencyConflictError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        except RateLimitExceededError as exc:
+            raise _rate_limit_exception(exc) from exc
         _apply_rate_headers(response, snapshot)
+        response.headers["X-Idempotency-Replayed"] = "true" if replayed else "false"
         log.info(
             "ingest_batch",
             account=auth.subject,
@@ -221,20 +305,46 @@ def create_app(
         response: Response,
         service: Annotated[OrbitApiService, Depends(get_service)],
         auth: Annotated[AuthContext, Depends(get_auth_context)],
+        idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     ) -> FeedbackBatchResponse:
-        snapshot = _consume_or_raise(
-            service.consume_event_quota,
-            account_key=auth.subject,
-            amount=len(payload.feedback),
-        )
+        if not payload.feedback:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="feedback batch cannot be empty",
+            )
+        if len(payload.feedback) > config.max_batch_items:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"feedback batch exceeds ORBIT_MAX_BATCH_ITEMS="
+                    f"{config.max_batch_items}"
+                ),
+            )
         try:
-            items = service.feedback_batch(payload.feedback)
+            items, snapshot, replayed = service.feedback_batch_with_quota(
+                account_key=auth.subject,
+                feedback=payload.feedback,
+                idempotency_key=idempotency_key,
+            )
         except KeyError as exc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=str(exc),
             ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        except IdempotencyConflictError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        except RateLimitExceededError as exc:
+            raise _rate_limit_exception(exc) from exc
         _apply_rate_headers(response, snapshot)
+        response.headers["X-Idempotency-Replayed"] = "true" if replayed else "false"
         log.info(
             "feedback_batch",
             account=auth.subject,
@@ -329,12 +439,16 @@ def _consume_or_raise(
     try:
         return consume_fn(account_key=account_key, amount=amount)
     except RateLimitExceededError as exc:
-        headers = {
-            **exc.snapshot.as_headers(),
-            "Retry-After": str(exc.retry_after_seconds),
-        }
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded.",
-            headers=headers,
-        ) from exc
+        raise _rate_limit_exception(exc) from exc
+
+
+def _rate_limit_exception(exc: RateLimitExceededError) -> HTTPException:
+    headers = {
+        **exc.snapshot.as_headers(),
+        "Retry-After": str(exc.retry_after_seconds),
+    }
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Rate limit exceeded.",
+        headers=headers,
+    )

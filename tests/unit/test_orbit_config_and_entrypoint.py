@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from orbit.config import Config
 from orbit_api.__main__ import main
 from orbit_api.config import ApiConfig
@@ -32,6 +34,10 @@ def test_api_config_from_env(monkeypatch) -> None:
     monkeypatch.setenv("ORBIT_JWT_SECRET", "secret")
     monkeypatch.setenv("ORBIT_JWT_ISSUER", "issuer")
     monkeypatch.setenv("ORBIT_JWT_AUDIENCE", "audience")
+    monkeypatch.setenv("ORBIT_MAX_INGEST_CONTENT_CHARS", "1234")
+    monkeypatch.setenv("ORBIT_MAX_QUERY_CHARS", "321")
+    monkeypatch.setenv("ORBIT_MAX_BATCH_ITEMS", "55")
+    monkeypatch.setenv("ORBIT_ENV", "production")
 
     config = ApiConfig.from_env()
     assert config.database_url == "sqlite:///tmp.db"
@@ -41,6 +47,20 @@ def test_api_config_from_env(monkeypatch) -> None:
     assert config.jwt_secret == "secret"
     assert config.jwt_issuer == "issuer"
     assert config.jwt_audience == "audience"
+    assert config.max_ingest_content_chars == 1234
+    assert config.max_query_chars == 321
+    assert config.max_batch_items == 55
+    assert config.environment == "production"
+
+
+def test_api_config_rejects_default_jwt_secret_in_production() -> None:
+    with pytest.raises(ValueError):
+        ApiConfig(environment="production")
+
+
+def test_api_config_rejects_jwt_none_algorithm() -> None:
+    with pytest.raises(ValueError):
+        ApiConfig(jwt_algorithm="none")
 
 
 def test_api_main_calls_uvicorn(monkeypatch) -> None:

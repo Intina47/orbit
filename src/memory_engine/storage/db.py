@@ -1,8 +1,18 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 
@@ -32,6 +42,48 @@ class MemoryRow(Base):
     latest_importance: Mapped[float] = mapped_column(Float, nullable=False)
     is_compressed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     original_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+class ApiAccountUsageRow(Base):
+    __tablename__ = "api_account_usage"
+
+    account_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    day_bucket: Mapped[date] = mapped_column(Date, nullable=False)
+    month_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    month_value: Mapped[int] = mapped_column(Integer, nullable=False)
+    events_today: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    queries_today: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    events_month: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    queries_month: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+class ApiIdempotencyRow(Base):
+    __tablename__ = "api_idempotency"
+    __table_args__ = (
+        UniqueConstraint(
+            "account_key",
+            "operation",
+            "idempotency_key",
+            name="uq_api_idempotency_scope",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    operation: Mapped[str] = mapped_column(String(32), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )

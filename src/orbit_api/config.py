@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 
 class ApiConfig(BaseModel):
@@ -18,7 +18,11 @@ class ApiConfig(BaseModel):
     free_events_per_day: int = 100
     free_queries_per_day: int = 500
     per_minute_limit: str = "1000/minute"
+    max_ingest_content_chars: int = 20_000
+    max_query_chars: int = 2_000
+    max_batch_items: int = 100
     uptime_percent: float = 99.9
+    environment: str = "development"
 
     jwt_secret: str = "orbit-dev-secret-change-me"
     jwt_algorithm: str = "HS256"
@@ -47,6 +51,18 @@ class ApiConfig(BaseModel):
             raise ValueError(msg)
         return stripped
 
+    @field_validator("jwt_algorithm")
+    @classmethod
+    def validate_jwt_algorithm(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            msg = "jwt_algorithm cannot be empty"
+            raise ValueError(msg)
+        if normalized.lower() == "none":
+            msg = "jwt_algorithm=none is not allowed"
+            raise ValueError(msg)
+        return normalized
+
     @field_validator("per_minute_limit")
     @classmethod
     def validate_per_minute_limit(cls, value: str) -> str:
@@ -55,6 +71,38 @@ class ApiConfig(BaseModel):
             msg = "per_minute_limit cannot be empty"
             raise ValueError(msg)
         return stripped
+
+    @field_validator(
+        "free_events_per_day",
+        "free_queries_per_day",
+        "max_ingest_content_chars",
+        "max_query_chars",
+        "max_batch_items",
+    )
+    @classmethod
+    def validate_positive_limits(cls, value: int) -> int:
+        if value <= 0:
+            msg = "limit values must be positive integers"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("environment")
+    @classmethod
+    def validate_environment(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized:
+            msg = "environment cannot be empty"
+            raise ValueError(msg)
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_production_jwt_secret(self) -> ApiConfig:
+        if self.environment in {"prod", "production"} and (
+            self.jwt_secret == "orbit-dev-secret-change-me"
+        ):
+            msg = "ORBIT_JWT_SECRET must be set to a non-default value in production"
+            raise ValueError(msg)
+        return self
 
     @classmethod
     def from_env(cls) -> ApiConfig:
@@ -72,7 +120,13 @@ class ApiConfig(BaseModel):
             free_events_per_day=_env_int("ORBIT_RATE_LIMIT_EVENTS_PER_DAY", 100),
             free_queries_per_day=_env_int("ORBIT_RATE_LIMIT_QUERIES_PER_DAY", 500),
             per_minute_limit=os.getenv("ORBIT_RATE_LIMIT_PER_MINUTE", "1000/minute"),
+            max_ingest_content_chars=_env_int(
+                "ORBIT_MAX_INGEST_CONTENT_CHARS", 20_000
+            ),
+            max_query_chars=_env_int("ORBIT_MAX_QUERY_CHARS", 2_000),
+            max_batch_items=_env_int("ORBIT_MAX_BATCH_ITEMS", 100),
             uptime_percent=_env_float("ORBIT_UPTIME_PERCENT", 99.9),
+            environment=os.getenv("ORBIT_ENV", "development"),
             jwt_secret=os.getenv("ORBIT_JWT_SECRET", "orbit-dev-secret-change-me"),
             jwt_algorithm=os.getenv("ORBIT_JWT_ALGORITHM", "HS256"),
             jwt_issuer=os.getenv("ORBIT_JWT_ISSUER", "orbit"),
