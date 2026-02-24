@@ -43,7 +43,7 @@ Auth mode envs:
   - `ORBIT_DASHBOARD_OIDC_ISSUER_URL`
   - `ORBIT_DASHBOARD_OIDC_CLIENT_ID`
   - `ORBIT_DASHBOARD_OIDC_CLIENT_SECRET`
-  - optional: `ORBIT_DASHBOARD_OIDC_REDIRECT_URI`, `ORBIT_DASHBOARD_OIDC_SCOPES`, `ORBIT_DASHBOARD_OIDC_PROMPT`
+  - optional: `ORBIT_DASHBOARD_OIDC_REDIRECT_URI`, `ORBIT_DASHBOARD_OIDC_SCOPES`, `ORBIT_DASHBOARD_OIDC_PROMPT`, `ORBIT_DASHBOARD_OIDC_TENANT_CLAIMS`
 
 Security controls:
 
@@ -56,6 +56,39 @@ Legacy static mode (not recommended):
 
 - `ORBIT_DASHBOARD_PROXY_AUTH_MODE=static`
 - `ORBIT_DASHBOARD_SERVER_BEARER_TOKEN`
+
+## OIDC provider quick envs
+
+Google:
+
+```bash
+ORBIT_DASHBOARD_AUTH_MODE=oidc
+ORBIT_DASHBOARD_OIDC_ISSUER_URL=https://accounts.google.com
+ORBIT_DASHBOARD_OIDC_CLIENT_ID=<google-client-id>
+ORBIT_DASHBOARD_OIDC_CLIENT_SECRET=<google-client-secret>
+ORBIT_DASHBOARD_OIDC_SCOPES="openid profile email"
+```
+
+Auth0:
+
+```bash
+ORBIT_DASHBOARD_AUTH_MODE=oidc
+ORBIT_DASHBOARD_OIDC_ISSUER_URL=https://<tenant>.us.auth0.com
+ORBIT_DASHBOARD_OIDC_CLIENT_ID=<auth0-client-id>
+ORBIT_DASHBOARD_OIDC_CLIENT_SECRET=<auth0-client-secret>
+ORBIT_DASHBOARD_OIDC_SCOPES="openid profile email"
+ORBIT_DASHBOARD_OIDC_TENANT_CLAIMS=org_id,organization
+```
+
+Clerk:
+
+```bash
+ORBIT_DASHBOARD_AUTH_MODE=oidc
+ORBIT_DASHBOARD_OIDC_ISSUER_URL=https://<your-clerk-domain>
+ORBIT_DASHBOARD_OIDC_CLIENT_ID=<clerk-client-id>
+ORBIT_DASHBOARD_OIDC_CLIENT_SECRET=<clerk-client-secret>
+ORBIT_DASHBOARD_OIDC_SCOPES="openid profile email"
+```
 
 ## Vercel setup
 
@@ -79,4 +112,33 @@ If your app is already running, set:
 
 ```bash
 PLAYWRIGHT_BASE_URL=http://127.0.0.1:3000
+```
+
+GitHub Actions workflow:
+
+- `.github/workflows/front-end-e2e.yml`
+- auto-runs only when repo variable `RUN_FRONTEND_E2E=true` (or manual dispatch).
+
+## Live OIDC callback smoke test
+
+Use local mock OIDC provider:
+
+```bash
+python -m uvicorn examples.mock_oidc_provider.app:app --host 127.0.0.1 --port 9100
+```
+
+Set frontend env (example):
+
+```bash
+ORBIT_DASHBOARD_AUTH_MODE=oidc
+ORBIT_DASHBOARD_OIDC_ISSUER_URL=http://127.0.0.1:9100
+ORBIT_DASHBOARD_OIDC_CLIENT_ID=orbit-dashboard-local
+ORBIT_DASHBOARD_OIDC_CLIENT_SECRET=orbit-dashboard-local-secret
+ORBIT_DASHBOARD_OIDC_REDIRECT_URI=http://127.0.0.1:3000/api/dashboard/auth/oidc/callback
+```
+
+Then run:
+
+```bash
+python scripts/live_oidc_callback_smoke.py
 ```

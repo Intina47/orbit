@@ -12,6 +12,7 @@
 - [API Reference](api_reference.md)
 - [Personalization](personalization.md)
 - [Deployment](deployment.md)
+- [Dashboard OIDC Setup](OIDC_DASHBOARD_SETUP.md)
 - [GCP Cloud Run Deployment](DEPLOY_GCP_CLOUD_RUN.md)
 - [GCP Env Matrix](GCP_ENV_MATRIX.md)
 - [Troubleshooting](troubleshooting.md)

@@ -480,6 +480,7 @@ export async function exchangeOidcCodeForPrincipal(options: {
   request: NextRequest
   code: string
   codeVerifier: string
+  expectedNonce?: string
 }): Promise<DashboardPrincipal> {
   const configError = dashboardOidcConfigError()
   if (configError) {
@@ -523,6 +524,7 @@ export async function exchangeOidcCodeForPrincipal(options: {
   const claims = await resolveOidcClaims({
     discovery,
     tokenPayload,
+    expectedNonce: options.expectedNonce,
   })
 
   const subject = normalizeClaimValue(claims.sub)
@@ -783,8 +785,25 @@ async function resolveOidcDiscovery(): Promise<OidcDiscoveryDocument> {
 async function resolveOidcClaims(options: {
   discovery: OidcDiscoveryDocument
   tokenPayload: OidcTokenResponse
+  expectedNonce?: string
 }): Promise<Record<string, unknown>> {
   const accessToken = options.tokenPayload.access_token?.trim()
+  const idToken = options.tokenPayload.id_token?.trim()
+  let idTokenClaims: Record<string, unknown> | null = null
+  if (idToken) {
+    idTokenClaims = decodeJwtPayload(idToken)
+    if (!idTokenClaims) {
+      throw new Error("Failed to decode OIDC id_token payload.")
+    }
+    const expectedNonce = options.expectedNonce?.trim()
+    if (expectedNonce) {
+      const actualNonce = normalizeClaimValue(idTokenClaims.nonce)
+      if (!actualNonce || actualNonce !== expectedNonce) {
+        throw new Error("OIDC nonce validation failed.")
+      }
+    }
+  }
+
   if (options.discovery.userinfo_endpoint && accessToken) {
     const userInfoResponse = await fetch(options.discovery.userinfo_endpoint, {
       method: "GET",
@@ -796,22 +815,21 @@ async function resolveOidcClaims(options: {
     })
     if (userInfoResponse.ok) {
       try {
-        return (await userInfoResponse.json()) as Record<string, unknown>
+        const userInfoClaims = (await userInfoResponse.json()) as Record<string, unknown>
+        return {
+          ...(idTokenClaims ?? {}),
+          ...userInfoClaims,
+        }
       } catch {
         // fall through to id_token decode
       }
     }
   }
 
-  const idToken = options.tokenPayload.id_token?.trim()
-  if (!idToken) {
+  if (!idTokenClaims) {
     throw new Error("OIDC token response missing both usable userinfo and id_token.")
   }
-  const decoded = decodeJwtPayload(idToken)
-  if (!decoded) {
-    throw new Error("Failed to decode OIDC id_token payload.")
-  }
-  return decoded
+  return idTokenClaims
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -869,14 +887,19 @@ function normalizeOptionalClaim(value: unknown): string | undefined {
 }
 
 function normalizeTenantClaim(claims: Record<string, unknown>): string | undefined {
-  const candidates = [
+  const customKeys = (process.env.ORBIT_DASHBOARD_OIDC_TENANT_CLAIMS?.trim() ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+  const candidates: unknown[] = customKeys.map((key) => claims[key])
+  candidates.push(
     claims.tid,
     claims.tenant,
     claims.org,
     claims.organization,
     claims.org_id,
     claims.hd,
-  ]
+  )
   for (const candidate of candidates) {
     const normalized = normalizeClaimValue(candidate)
     if (normalized) {

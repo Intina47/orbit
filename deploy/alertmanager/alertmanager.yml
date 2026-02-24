@@ -1,0 +1,56 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: default-webhook
+  group_by:
+    - alertname
+    - service
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 2h
+  routes:
+    - receiver: critical-slack-email
+      matchers:
+        - severity="critical"
+    - receiver: warning-slack-email
+      matchers:
+        - severity="warning"
+
+receivers:
+  - name: default-webhook
+    webhook_configs:
+      - url: ${ALERTMANAGER_DEFAULT_WEBHOOK_URL}
+        send_resolved: true
+
+  - name: critical-slack-email
+    slack_configs:
+      - api_url: ${ALERTMANAGER_SLACK_WEBHOOK_URL}
+        channel: ${ALERTMANAGER_SLACK_CHANNEL}
+        send_resolved: true
+        title: "[CRITICAL] {{ .CommonLabels.alertname }}"
+        text: "{{ range .Alerts }}{{ .Annotations.summary }}\n{{ .Annotations.description }}\n{{ end }}"
+    email_configs:
+      - to: ${ALERTMANAGER_EMAIL_TO}
+        from: ${ALERTMANAGER_EMAIL_FROM}
+        smarthost: ${ALERTMANAGER_EMAIL_SMARTHOST}
+        auth_username: ${ALERTMANAGER_EMAIL_USERNAME}
+        auth_password: ${ALERTMANAGER_EMAIL_PASSWORD}
+        require_tls: false
+        send_resolved: true
+
+  - name: warning-slack-email
+    slack_configs:
+      - api_url: ${ALERTMANAGER_SLACK_WEBHOOK_URL}
+        channel: ${ALERTMANAGER_SLACK_CHANNEL}
+        send_resolved: true
+        title: "[WARNING] {{ .CommonLabels.alertname }}"
+        text: "{{ range .Alerts }}{{ .Annotations.summary }}\n{{ .Annotations.description }}\n{{ end }}"
+    email_configs:
+      - to: ${ALERTMANAGER_EMAIL_TO}
+        from: ${ALERTMANAGER_EMAIL_FROM}
+        smarthost: ${ALERTMANAGER_EMAIL_SMARTHOST}
+        auth_username: ${ALERTMANAGER_EMAIL_USERNAME}
+        auth_password: ${ALERTMANAGER_EMAIL_PASSWORD}
+        require_tls: false
+        send_resolved: true

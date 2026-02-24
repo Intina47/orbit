@@ -55,7 +55,7 @@ test("password login unlocks dashboard and supports create flow", async ({ page 
   await page.getByPlaceholder("Dashboard password").fill("super-secret")
   await page.getByRole("button", { name: "Sign in" }).click()
 
-  await expect(page.getByText("API Keys")).toBeVisible()
+  await expect(page.getByText("API Keys", { exact: true })).toBeVisible()
   await page.getByRole("button", { name: "Create key" }).click()
   await page.getByRole("button", { name: "Create key" }).last().click()
   await expect(page.getByText("Copy this key now")).toBeVisible()

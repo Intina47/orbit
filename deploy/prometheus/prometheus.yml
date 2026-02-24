@@ -4,6 +4,12 @@ global:
 rule_files:
   - /etc/prometheus/alerts-orbit.yml
 
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
 scrape_configs:
   - job_name: "orbit-api"
     metrics_path: /v1/metrics

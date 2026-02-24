@@ -52,6 +52,26 @@ services:
       - "9090:9090"
     depends_on:
       - orbit-api
+      - alertmanager
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--config.expand-env"
+    environment:
+      ALERTMANAGER_DEFAULT_WEBHOOK_URL: "${ALERTMANAGER_DEFAULT_WEBHOOK_URL:-http://127.0.0.1:65535/noop}"
+      ALERTMANAGER_SLACK_WEBHOOK_URL: "${ALERTMANAGER_SLACK_WEBHOOK_URL:-http://127.0.0.1:65535/slack}"
+      ALERTMANAGER_SLACK_CHANNEL: "${ALERTMANAGER_SLACK_CHANNEL:-#orbit-alerts}"
+      ALERTMANAGER_EMAIL_TO: "${ALERTMANAGER_EMAIL_TO:-alerts@example.com}"
+      ALERTMANAGER_EMAIL_FROM: "${ALERTMANAGER_EMAIL_FROM:-orbit-alerts@example.com}"
+      ALERTMANAGER_EMAIL_SMARTHOST: "${ALERTMANAGER_EMAIL_SMARTHOST:-localhost:1025}"
+      ALERTMANAGER_EMAIL_USERNAME: "${ALERTMANAGER_EMAIL_USERNAME:-}"
+      ALERTMANAGER_EMAIL_PASSWORD: "${ALERTMANAGER_EMAIL_PASSWORD:-}"
+    volumes:
+      - ./deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest

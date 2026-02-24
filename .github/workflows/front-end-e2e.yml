@@ -1,0 +1,50 @@
+name: front-end-e2e
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "front-end/**"
+      - ".github/workflows/front-end-e2e.yml"
+  pull_request:
+    paths:
+      - "front-end/**"
+      - ".github/workflows/front-end-e2e.yml"
+
+jobs:
+  playwright-e2e:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.RUN_FRONTEND_E2E == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: front-end
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: "front-end/pnpm-lock.yaml"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run Playwright E2E
+        env:
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:3010
+        run: pnpm test:e2e

@@ -54,7 +54,7 @@ pip install -e .
 
 ### 2) Start Orbit API Locally
 
-Recommended full local stack (API + Postgres + Prometheus + OpenTelemetry collector):
+Recommended full local stack (API + Postgres + Prometheus + Alertmanager + OpenTelemetry collector):
 
 ```bash
 docker compose up --build
@@ -154,7 +154,7 @@ Most important environment variables:
 | API runtime | `ORBIT_API_HOST`, `ORBIT_API_PORT`, `ORBIT_ENV` |
 | Limits | `ORBIT_RATE_LIMIT_EVENTS_PER_DAY`, `ORBIT_RATE_LIMIT_QUERIES_PER_DAY`, `ORBIT_RATE_LIMIT_PER_MINUTE` |
 | Personalization | `MDE_ENABLE_ADAPTIVE_PERSONALIZATION` and `MDE_PERSONALIZATION_*` |
-| Observability | `ORBIT_OTEL_SERVICE_NAME`, `ORBIT_OTEL_EXPORTER_ENDPOINT` |
+| Observability | `ORBIT_OTEL_SERVICE_NAME`, `ORBIT_OTEL_EXPORTER_ENDPOINT`, `ALERTMANAGER_SLACK_WEBHOOK_URL`, `ALERTMANAGER_EMAIL_*` |
 
 ## Provider Adapters
 
@@ -182,6 +182,7 @@ pip install "orbit-memory[llm-adapters]"
 - enforce strict JWT verification (`ORBIT_ENV=production` + non-default secrets)
 - configure API limits and batch caps
 - enable metrics + tracing and scrape `/v1/metrics`
+- configure Alertmanager routes for Slack/email delivery
 - set backup/retention policies for primary database
 - load-test retrieval quality under long horizons
 

@@ -82,6 +82,7 @@ export default function ConfigurationPage() {
         { var: "ORBIT_DASHBOARD_OIDC_CLIENT_SECRET", desc: "OIDC client secret" },
         { var: "ORBIT_DASHBOARD_OIDC_REDIRECT_URI", desc: "Optional explicit OIDC redirect URI" },
         { var: "ORBIT_DASHBOARD_OIDC_SCOPES", desc: "Optional OIDC scopes string" },
+        { var: "ORBIT_DASHBOARD_OIDC_TENANT_CLAIMS", desc: "Optional comma-separated tenant claim keys" },
         { var: "ORBIT_DASHBOARD_ALLOWED_ORIGINS", desc: "Optional CSRF origin allow-list for dashboard mutations" },
         { var: "ORBIT_DASHBOARD_LOGIN_WINDOW_SECONDS", desc: "Password login throttle window" },
         { var: "ORBIT_DASHBOARD_LOGIN_MAX_ATTEMPTS", desc: "Max failed password attempts per window" },

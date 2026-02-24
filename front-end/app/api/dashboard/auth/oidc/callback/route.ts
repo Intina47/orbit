@@ -36,7 +36,15 @@ export async function GET(request: NextRequest) {
   const code = callbackUrl.searchParams.get("code")?.trim() ?? ""
   const expectedState = request.cookies.get(DASHBOARD_OIDC_STATE_COOKIE_NAME)?.value?.trim() ?? ""
   const codeVerifier = request.cookies.get(DASHBOARD_OIDC_VERIFIER_COOKIE_NAME)?.value?.trim() ?? ""
-  if (!returnedState || !expectedState || returnedState !== expectedState || !code || !codeVerifier) {
+  const expectedNonce = request.cookies.get(DASHBOARD_OIDC_NONCE_COOKIE_NAME)?.value?.trim() ?? ""
+  if (
+    !returnedState
+    || !expectedState
+    || returnedState !== expectedState
+    || !code
+    || !codeVerifier
+    || !expectedNonce
+  ) {
     logDashboardAuthEvent("dashboard_oidc_callback_state_invalid", request)
     return redirectToDashboard(request, "oidc_state_invalid")
   }
@@ -46,6 +54,7 @@ export async function GET(request: NextRequest) {
       request,
       code,
       codeVerifier,
+      expectedNonce,
     })
     const response = NextResponse.redirect(new URL("/dashboard", request.url), {
       status: 307,

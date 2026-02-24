@@ -15,7 +15,8 @@ export default defineConfig({
   webServer: process.env.PLAYWRIGHT_BASE_URL
     ? undefined
     : {
-        command: "npm run dev -- --port 3010",
+        // Force webpack for Playwright runs to avoid known Turbopack dev-server panics.
+        command: "npm run dev -- --port 3010 --webpack",
         url: baseURL,
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,
