@@ -1,6 +1,6 @@
 [project]
 name = "orbit-memory"
-version = "0.1.0"
+version = "0.1.0a1"
 description = "Intelligent-first memory decision engine for developers"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11,<4.0"

@@ -1,4 +1,4 @@
-name: Publish PyPI
+name: Publish TestPyPI
 
 on:
   push:
@@ -10,12 +10,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: publish-pypi-${{ github.ref }}
+  group: publish-testpypi-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   build:
-    if: ${{ github.event_name == 'workflow_dispatch' || (!contains(github.ref_name, 'a') && !contains(github.ref_name, 'b') && !contains(github.ref_name, 'rc')) }}
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.ref_name, 'a') || contains(github.ref_name, 'b') || contains(github.ref_name, 'rc') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -43,7 +43,7 @@ jobs:
             exit 1
           fi
 
-      - name: Block pre-releases on real PyPI
+      - name: Require pre-release version for TestPyPI
         run: |
           PACKAGE_VERSION="$(python - <<'PY'
           import pathlib
@@ -55,8 +55,11 @@ jobs:
           )"
           case "$PACKAGE_VERSION" in
             *a*|*b*|*rc*)
-              echo "Pre-release version ($PACKAGE_VERSION) detected."
-              echo "Use publish-testpypi.yml for alpha/beta/rc builds."
+              echo "Pre-release version detected: $PACKAGE_VERSION"
+              ;;
+            *)
+              echo "TestPyPI workflow is for pre-releases only."
+              echo "Current version is stable: $PACKAGE_VERSION"
               exit 1
               ;;
           esac
@@ -73,27 +76,28 @@ jobs:
       - name: Upload distribution artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: python-dist
+          name: python-dist-testpypi
           path: dist/*
 
-  publish-pypi:
-    name: Publish to PyPI
+  publish-testpypi:
+    name: Publish to TestPyPI
     needs: build
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
     environment:
-      name: pypi
-      url: https://pypi.org/p/orbit-memory
+      name: testpypi
+      url: https://test.pypi.org/p/orbit-memory
     steps:
       - name: Download distribution artifacts
         uses: actions/download-artifact@v4
         with:
-          name: python-dist
+          name: python-dist-testpypi
           path: dist
 
-      - name: Publish package distributions to PyPI
+      - name: Publish package distributions to TestPyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+          repository-url: https://test.pypi.org/legacy/
