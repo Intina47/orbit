@@ -10,5 +10,10 @@ memory.db
 *.idx
 .env
 .venv/
+.env.testpypi
+.env.pypi
+dist/
+.venv-pkgtest/
+.venv-pypi-smoke/
 docs/_build/
 tmp/
