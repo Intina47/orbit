@@ -1031,3 +1031,97 @@ Validation:
 - `python -m pytest -q`: PASS
 - `python -m ruff check src tests`: PASS
 - `python -m pylint src/memory_engine/personalization/adaptive.py src/orbit/eval_harness.py tests/integration/test_adaptive_personalization.py tests/unit/test_eval_harness.py --fail-under=9.0`: PASS (9.98/10)
+
+### 2026-02-23 - Remediation Phase 4 (Inferred Memory Lifecycle: TTL + Refresh + Supersession)
+
+Completed:
+- Added lifecycle configuration controls:
+  - `src/decision_engine/config.py`
+    - `personalization_inferred_ttl_days` (default `45`)
+    - `personalization_inferred_refresh_days` (default `14`)
+    - `personalization_lifecycle_check_interval_seconds` (default `30`, supports `0`)
+  - `src/memory_engine/config.py` now carries these through from core config.
+  - `.env.example` updated with corresponding env vars:
+    - `MDE_PERSONALIZATION_INFERRED_TTL_DAYS`
+    - `MDE_PERSONALIZATION_INFERRED_REFRESH_DAYS`
+    - `MDE_PERSONALIZATION_LIFECYCLE_CHECK_INTERVAL_SECONDS`
+- Implemented inferred-memory lifecycle semantics in adaptive engine:
+  - `src/memory_engine/personalization/adaptive.py`
+  - `InferredMemoryCandidate` now supports `supersedes_memory_ids`
+  - signature reservation now supports:
+    - dedupe while fresh
+    - refresh when stale by returning superseded IDs
+  - added `expired_inferred_memory_ids()` for TTL pruning
+  - added `notify_memories_deleted(...)` for signature-cache cleanup
+- Wired lifecycle execution into runtime engine:
+  - `src/memory_engine/engine.py`
+  - periodic lifecycle scans on write/feedback path
+  - automatic TTL pruning of expired inferred memories
+  - supersession delete path before writing refreshed inferred memories
+  - unified memory delete helper to keep storage/vector/cache/persona state consistent
+- Developer docs updated:
+  - `docs/developer_documentation.md` personalization controls table now includes lifecycle knobs.
+
+Tests Added/Updated:
+- `tests/integration/test_adaptive_personalization.py`
+  - `test_inferred_signature_refresh_supersedes_old_memory`
+  - `test_inferred_memory_ttl_expires_and_is_pruned`
+- `tests/unit/test_decision_config.py`
+  - env parsing assertions for new lifecycle config
+  - negative lifecycle interval validation test
+
+Scorecard regression check:
+- Reference before:
+  - `tmp/eval_phase3_inferred_v3/orbit_eval_scorecard.json`
+- After lifecycle phase:
+  - `tmp/eval_phase4_lifecycle/orbit_eval_scorecard.json`
+- Orbit metrics delta (after - before):
+  - `avg_precision_at_5`: `0.40 -> 0.40` (`+0.00`)
+  - `top1_relevant_rate`: `0.75 -> 0.75` (`+0.00`)
+  - `personalization_hit_rate`: `1.00 -> 1.00` (`+0.00`)
+  - `predicted_helpfulness_rate`: `1.00 -> 1.00` (`+0.00`)
+  - `assistant_noise_rate`: `0.00 -> 0.00` (`+0.00`)
+  - `stale_memory_rate`: `0.00 -> 0.00` (`+0.00`)
+
+Validation:
+- `python -m pytest -q`: PASS
+- `python -m ruff check src/decision_engine/config.py src/memory_engine/config.py src/memory_engine/personalization/adaptive.py src/memory_engine/engine.py tests/unit/test_decision_config.py tests/integration/test_adaptive_personalization.py`: PASS
+- `python -m pylint src/decision_engine/config.py src/memory_engine/config.py src/memory_engine/personalization/adaptive.py src/memory_engine/engine.py tests/unit/test_decision_config.py tests/integration/test_adaptive_personalization.py --fail-under=9.0`: PASS (10.00/10)
+
+### 2026-02-23 - API Transparency Upgrade (Inference Provenance on Retrieve)
+
+Completed:
+- Added structured inference provenance metadata to every memory returned by API retrieve/list endpoints:
+  - `src/orbit_api/service.py`
+  - new `metadata.inference_provenance` block includes:
+    - `is_inferred`
+    - `why`
+    - `when`
+    - `inference_type`
+    - `signature`
+    - `derived_from_memory_ids`
+    - `supersedes_memory_ids`
+- Implemented normalization/parsing from stored relationship markers:
+  - `inference_type:<...>`
+  - `signature:<...>`
+  - `derived_from:<memory_id>`
+  - `supersedes:<memory_id>`
+  - `inferred:true`
+- Added default provenance for non-inferred memories so downstream debugging code has a stable shape.
+- Improved inferred candidate persistence to include supersession markers:
+  - `src/memory_engine/engine.py` now appends `supersedes:<id>` relationships when refreshed inferred memories replace older ones.
+- Added provenance marker enrichment for inferred preference memories:
+  - `src/memory_engine/personalization/adaptive.py`
+  - writes `inferred:true`, `inference_type:feedback_preference_shift`, and signature relationship.
+- Updated developer docs with retrieve response snippet showing provenance object:
+  - `docs/developer_documentation.md`
+
+Tests added/updated:
+- `tests/unit/test_orbit_api_service.py`
+  - `test_service_adds_inference_provenance_for_inferred_memories`
+  - `test_service_adds_inference_provenance_defaults_for_regular_memories`
+
+Validation:
+- `python -m pytest -q`: PASS
+- `python -m ruff check src/orbit_api/service.py src/memory_engine/engine.py src/memory_engine/personalization/adaptive.py tests/unit/test_orbit_api_service.py`: PASS
+- `python -m pylint src/orbit_api/service.py tests/unit/test_orbit_api_service.py --fail-under=9.0`: PASS (9.87/10)

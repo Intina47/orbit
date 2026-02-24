@@ -146,7 +146,14 @@ class DecisionEngine:
             window_days=self.config.personalization_window_days,
             min_feedback_events=self.config.personalization_min_feedback_events,
             preference_margin=self.config.personalization_preference_margin,
+            inferred_ttl_days=self.config.personalization_inferred_ttl_days,
+            inferred_refresh_days=self.config.personalization_inferred_refresh_days,
         )
+        self._lifecycle_scan_interval_seconds = max(
+            0,
+            int(self.config.personalization_lifecycle_check_interval_seconds),
+        )
+        self._last_lifecycle_scan_at: datetime | None = None
         self._total_memories = 0
         self._entity_reference_counts: dict[str, int] = {}
         self._entity_memory_ids: dict[str, set[str]] = {}
@@ -164,6 +171,7 @@ class DecisionEngine:
     def store_memory(
         self, processed: ProcessedEvent, decision: StorageDecision
     ) -> MemoryRecord | None:
+        self._run_personalization_lifecycle()
         if not decision.store:
             self._metrics["events_discarded"] += 1
             return None
@@ -209,6 +217,7 @@ class DecisionEngine:
         helpful_memory_ids: list[str],
         outcome_signal: float = 1.0,
     ) -> dict[str, float | None]:
+        self._run_personalization_lifecycle()
         feedback = OutcomeFeedback(
             query=query,
             ranked_memory_ids=ranked_memory_ids,
@@ -289,10 +298,7 @@ class DecisionEngine:
         if not plan.should_compress:
             return
 
-        self.storage.delete_memories(plan.memory_ids_to_replace)
-        self.vector_store.remove_many(plan.memory_ids_to_replace)
-        for memory in candidates:
-            self._unregister_stored_memory(memory)
+        self._delete_memories(plan.memory_ids_to_replace)
         compressed_event = Event(
             timestamp=processed.timestamp,
             entity_id=processed.entity_id,
@@ -364,7 +370,26 @@ class DecisionEngine:
             self._store_inferred_candidate(candidate)
 
     def _store_inferred_candidate(self, candidate: InferredMemoryCandidate) -> None:
+        if candidate.supersedes_memory_ids:
+            removed = self._delete_memories(list(candidate.supersedes_memory_ids))
+            if removed:
+                self._metrics["inferred_memories_superseded"] = (
+                    self._metrics.get("inferred_memories_superseded", 0.0)
+                    + float(len(removed))
+                )
+                self._log.info(
+                    "adaptive_inferred_memories_superseded",
+                    entity_id=candidate.entity_id,
+                    event_type=candidate.event_type,
+                    removed_count=len(removed),
+                )
         metadata = dict(candidate.metadata)
+        relationships = [str(item) for item in metadata.get("relationships", [])]
+        if candidate.supersedes_memory_ids:
+            relationships.extend(
+                f"supersedes:{memory_id}" for memory_id in candidate.supersedes_memory_ids
+            )
+        metadata["relationships"] = _unique_preserving_order(relationships)
         metadata.setdefault("summary", candidate.summary)
         metadata.setdefault("intent", candidate.event_type)
         metadata.setdefault("entities", [candidate.entity_id])
@@ -404,6 +429,46 @@ class DecisionEngine:
             event_type=candidate.event_type,
             confidence=round(candidate.confidence, 3),
             memory_id=stored.memory_id,
+        )
+
+    def _delete_memories(self, memory_ids: list[str]) -> list[MemoryRecord]:
+        unique_ids = sorted({memory_id for memory_id in memory_ids if memory_id})
+        if not unique_ids:
+            return []
+        existing = self.storage.fetch_by_ids(unique_ids)
+        if not existing:
+            return []
+        existing_ids = [memory.memory_id for memory in existing]
+        self.storage.delete_memories(existing_ids)
+        self.vector_store.remove_many(existing_ids)
+        for memory in existing:
+            self._unregister_stored_memory(memory)
+        self.personalization.notify_memories_deleted(existing)
+        return existing
+
+    def _run_personalization_lifecycle(self) -> None:
+        now = datetime.now(UTC)
+        if (
+            self._lifecycle_scan_interval_seconds > 0
+            and self._last_lifecycle_scan_at is not None
+            and (now - self._last_lifecycle_scan_at).total_seconds()
+            < self._lifecycle_scan_interval_seconds
+        ):
+            return
+        self._last_lifecycle_scan_at = now
+        expired_ids = self.personalization.expired_inferred_memory_ids()
+        if not expired_ids:
+            return
+        removed = self._delete_memories(expired_ids)
+        if not removed:
+            return
+        self._metrics["inferred_memories_expired"] = (
+            self._metrics.get("inferred_memories_expired", 0.0)
+            + float(len(removed))
+        )
+        self._log.info(
+            "adaptive_inferred_memories_expired",
+            removed_count=len(removed),
         )
 
     def _write_metrics(self) -> None:
@@ -495,3 +560,15 @@ class DecisionEngine:
         filtered = [ts for ts in timestamps if ts.timestamp() >= window_start]
         self._recent_key_timestamps[key] = filtered
         return len(filtered)
+
+
+def _unique_preserving_order(values: list[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        output.append(normalized)
+    return output

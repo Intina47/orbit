@@ -43,6 +43,7 @@ def _retrieved(
     content: str,
     score: float,
     age_days: float = 0.0,
+    relationships: list[str] | None = None,
 ) -> RetrievedMemory:
     now = datetime.now(UTC)
     created_at = now - timedelta(days=age_days)
@@ -53,7 +54,7 @@ def _retrieved(
         summary=content,
         intent=intent,
         entities=["alice"],
-        relationships=[],
+        relationships=list(relationships or []),
         raw_embedding=[0.1, 0.2],
         semantic_embedding=[0.1, 0.2],
         semantic_key=f"key-{memory_id}",
@@ -287,6 +288,80 @@ def test_service_boosts_inferred_pattern_for_mistake_queries(tmp_path: Path) -> 
         service.close()
 
 
+def test_service_prefers_failure_pattern_over_generic_topic_cluster(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        generic_pattern = _retrieved(
+            "pattern_generic",
+            intent="inferred_learning_pattern",
+            content=(
+                "Inferred learning pattern: alice repeatedly asks about project architecture."
+            ),
+            score=0.91,
+            relationships=["inference_type:repeat_question_cluster"],
+        )
+        failure_pattern = _retrieved(
+            "pattern_failure",
+            intent="inferred_learning_pattern",
+            content=(
+                "Inferred learning pattern: alice repeatedly struggles with TypeError on list indexing."
+            ),
+            score=0.66,
+            relationships=["inference_type:recurring_failure_pattern"],
+        )
+        progress = _retrieved(
+            "progress",
+            intent="learning_progress",
+            content="PROGRESS: Alice now understands modular architecture.",
+            score=0.84,
+        )
+        reweighted = service._reweight_ranked_by_query(
+            query="What mistake does Alice keep repeating in Python?",
+            ranked=[generic_pattern, progress, failure_pattern],
+            candidates=[generic_pattern.memory, progress.memory, failure_pattern.memory],
+        )
+        promoted = service._promote_primary_candidate_for_query(
+            query="What mistake does Alice keep repeating in Python?",
+            ranked=reweighted,
+        )
+        assert promoted[0].memory.memory_id == "pattern_failure"
+    finally:
+        service.close()
+
+
+def test_service_promotes_learning_progress_for_architecture_queries(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    try:
+        profile = _retrieved(
+            "profile",
+            intent="inferred_preference",
+            content="Inferred preference: Alice responds better to concise explanations.",
+            score=0.93,
+            relationships=["inference_type:feedback_preference_shift"],
+        )
+        progress = _retrieved(
+            "progress",
+            intent="learning_progress",
+            content="PROGRESS: Alice now understands module architecture and service boundaries.",
+            score=0.72,
+            relationships=["inference_type:progress_accumulation"],
+        )
+        reweighted = service._reweight_ranked_by_query(
+            query="What is Alice's current level for project architecture and what is next?",
+            ranked=[profile, progress],
+            candidates=[profile.memory, progress.memory],
+        )
+        promoted = service._promote_primary_candidate_for_query(
+            query="What is Alice's current level for project architecture and what is next?",
+            ranked=reweighted,
+        )
+        assert promoted[0].memory.intent == "learning_progress"
+    finally:
+        service.close()
+
+
 def test_service_suppresses_stale_profile_when_newer_progress_exists(
     tmp_path: Path,
 ) -> None:
@@ -357,9 +432,10 @@ def test_service_diversifies_profiles_for_architecture_queries(tmp_path: Path) -
             query="Alice now asks about structuring larger projects and architecture.",
         )
         selected_intents = [item.memory.intent for item in selected]
-        assert selected_intents.count("preference_stated") == 1
-        assert selected_intents.count("learning_progress") == 2
-        assert "inferred_learning_pattern" in selected_intents
+        assert selected_intents[:2] == ["learning_progress", "learning_progress"]
+        assert selected_intents.count("learning_progress") >= 2
+        assert selected_intents.count("preference_stated") <= 2
+        assert "inferred_learning_pattern" not in selected_intents
     finally:
         service.close()
 
@@ -403,6 +479,253 @@ def test_service_preserves_profile_density_for_style_queries(tmp_path: Path) -> 
             "preference_stated",
             "preference_stated",
         ]
+    finally:
+        service.close()
+
+
+def test_service_progress_queries_cap_non_progress_buckets(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        ranked = [
+            _retrieved(
+                "profile_1",
+                intent="preference_stated",
+                content="PROFILE: Alice prefers concise answers.",
+                score=0.99,
+            ),
+            _retrieved(
+                "pattern_1",
+                intent="inferred_learning_pattern",
+                content="PATTERN: Alice repeats loop syntax questions.",
+                score=0.98,
+            ),
+            _retrieved(
+                "progress_1",
+                intent="learning_progress",
+                content="PROGRESS: Alice understands loops and functions.",
+                score=0.97,
+            ),
+            _retrieved(
+                "progress_2",
+                intent="learning_progress",
+                content="PROGRESS: Alice understands classes.",
+                score=0.96,
+            ),
+            _retrieved(
+                "progress_3",
+                intent="learning_progress",
+                content="PROGRESS: Alice understands project modules.",
+                score=0.95,
+            ),
+            _retrieved(
+                "progress_4",
+                intent="learning_progress",
+                content="PROGRESS: Alice understands dependency injection.",
+                score=0.94,
+            ),
+            _retrieved(
+                "progress_5",
+                intent="learning_progress",
+                content="PROGRESS: Alice understands testing strategy.",
+                score=0.93,
+            ),
+        ]
+        selected = service._select_with_intent_caps(
+            ranked,
+            top_k=5,
+            query="What is Alice's current level for project architecture and what is next?",
+        )
+        assert len(selected) == 5
+        assert all(item.memory.intent == "learning_progress" for item in selected)
+    finally:
+        service.close()
+
+
+def test_service_progress_queries_surface_inferred_progress_when_available(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    try:
+        ranked = [
+            _retrieved(
+                "progress_1",
+                intent="learning_progress",
+                content="PROGRESS: Alice understands loops and functions.",
+                score=0.99,
+            ),
+            _retrieved(
+                "progress_2",
+                intent="learning_progress",
+                content="PROGRESS: Alice understands classes.",
+                score=0.98,
+            ),
+            _retrieved(
+                "progress_3",
+                intent="learning_progress",
+                content="PROGRESS: Alice understands project modules.",
+                score=0.97,
+            ),
+            _retrieved(
+                "progress_4",
+                intent="learning_progress",
+                content="PROGRESS: Alice understands dependency injection.",
+                score=0.96,
+            ),
+            _retrieved(
+                "progress_5",
+                intent="learning_progress",
+                content="PROGRESS: Alice understands testing strategy.",
+                score=0.95,
+            ),
+            _retrieved(
+                "progress_inferred",
+                intent="learning_progress",
+                content="Inferred progress: Alice has progressed in project structure.",
+                score=0.70,
+                relationships=["inference_type:progress_accumulation", "inferred:true"],
+            ),
+        ]
+        selected = service._select_with_intent_caps(
+            ranked,
+            top_k=5,
+            query="What is Alice's current level for project architecture and what is next?",
+        )
+        selected_ids = [item.memory.memory_id for item in selected]
+        assert "progress_inferred" in selected_ids
+        assert selected[0].memory.memory_id == "progress_1"
+    finally:
+        service.close()
+
+
+def test_service_adds_inference_provenance_for_inferred_memories(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    try:
+        created_at = datetime.now(UTC) - timedelta(minutes=3)
+        record = MemoryRecord(
+            memory_id="prov_1",
+            event_id="event-prov-1",
+            content=(
+                "Inferred learning pattern: alice repeatedly struggles with list indexing."
+            ),
+            summary="alice repeatedly struggles with list indexing",
+            intent="inferred_learning_pattern",
+            entities=["alice"],
+            relationships=[
+                "inferred:true",
+                "inference_type:recurring_failure_pattern",
+                "derived_from:mem_a",
+                "derived_from:mem_b",
+                "signature:alice|recurring_failure_pattern|list indexing",
+                "supersedes:old_mem_1",
+            ],
+            raw_embedding=[0.1, 0.2],
+            semantic_embedding=[0.1, 0.2],
+            semantic_key="key-prov-1",
+            created_at=created_at,
+            updated_at=created_at,
+            retrieval_count=2,
+            avg_outcome_signal=0.3,
+            storage_tier=StorageTier.PERSISTENT,
+            latest_importance=0.91,
+        )
+        memory = service._as_memory(record, rank_position=1, rank_score=0.92)
+        serialized = memory.model_dump(mode="json")
+        provenance = dict(serialized["metadata"]).get("inference_provenance", {})
+        assert provenance.get("is_inferred") is True
+        assert provenance.get("inference_type") == "recurring_failure_pattern"
+        assert provenance.get("derived_from_memory_ids") == ["mem_a", "mem_b"]
+        assert provenance.get("supersedes_memory_ids") == ["old_mem_1"]
+        assert provenance.get("signature") == (
+            "alice|recurring_failure_pattern|list indexing"
+        )
+        assert provenance.get("when") == created_at.isoformat()
+        assert "Repeated failure/error signals" in str(provenance.get("why"))
+    finally:
+        service.close()
+
+
+def test_service_adds_derived_from_for_inferred_preference_provenance(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    try:
+        created_at = datetime.now(UTC) - timedelta(minutes=2)
+        record = MemoryRecord(
+            memory_id="prov_pref_1",
+            event_id="event-prov-pref-1",
+            content=(
+                "Inferred preference: alice responds better to concise explanations."
+            ),
+            summary="alice prefers concise explanations",
+            intent="inferred_preference",
+            entities=["alice"],
+            relationships=[
+                "inferred:true",
+                "inference_type:feedback_preference_shift",
+                "derived_from:assistant_mem_1",
+                "derived_from:assistant_mem_2",
+                "signature:alice|feedback_preference_shift|concise",
+            ],
+            raw_embedding=[0.1, 0.2],
+            semantic_embedding=[0.1, 0.2],
+            semantic_key="key-prov-pref-1",
+            created_at=created_at,
+            updated_at=created_at,
+            retrieval_count=1,
+            avg_outcome_signal=0.2,
+            storage_tier=StorageTier.PERSISTENT,
+            latest_importance=0.89,
+        )
+        memory = service._as_memory(record, rank_position=1, rank_score=0.88)
+        provenance = dict(memory.model_dump(mode="json")["metadata"]).get(
+            "inference_provenance",
+            {},
+        )
+        assert provenance.get("inference_type") == "feedback_preference_shift"
+        assert provenance.get("derived_from_memory_ids") == [
+            "assistant_mem_1",
+            "assistant_mem_2",
+        ]
+    finally:
+        service.close()
+
+
+def test_service_adds_inference_provenance_defaults_for_regular_memories(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    try:
+        now = datetime.now(UTC)
+        record = MemoryRecord(
+            memory_id="regular_1",
+            event_id="event-regular-1",
+            content="Alice prefers short explanations.",
+            summary="Alice prefers short explanations.",
+            intent="preference_stated",
+            entities=["alice"],
+            relationships=[],
+            raw_embedding=[0.1, 0.2],
+            semantic_embedding=[0.1, 0.2],
+            semantic_key="key-regular-1",
+            created_at=now,
+            updated_at=now,
+            retrieval_count=1,
+            avg_outcome_signal=0.0,
+            storage_tier=StorageTier.PERSISTENT,
+            latest_importance=0.75,
+        )
+        memory = service._as_memory(record, rank_position=1, rank_score=0.7)
+        serialized = memory.model_dump(mode="json")
+        provenance = dict(serialized["metadata"]).get("inference_provenance", {})
+        assert provenance.get("is_inferred") is False
+        assert provenance.get("why") is None
+        assert provenance.get("when") is None
+        assert provenance.get("inference_type") is None
+        assert provenance.get("signature") is None
+        assert provenance.get("derived_from_memory_ids") == []
+        assert provenance.get("supersedes_memory_ids") == []
     finally:
         service.close()
 

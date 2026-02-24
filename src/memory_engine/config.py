@@ -31,6 +31,11 @@ class EngineConfig(CoreEngineConfig):
             personalization_window_days=base.personalization_window_days,
             personalization_min_feedback_events=base.personalization_min_feedback_events,
             personalization_preference_margin=base.personalization_preference_margin,
+            personalization_inferred_ttl_days=base.personalization_inferred_ttl_days,
+            personalization_inferred_refresh_days=base.personalization_inferred_refresh_days,
+            personalization_lifecycle_check_interval_seconds=(
+                base.personalization_lifecycle_check_interval_seconds
+            ),
             persistent_confidence_prior=base.persistent_confidence_prior,
             ephemeral_confidence_prior=base.ephemeral_confidence_prior,
             importance_learning_rate=base.importance_learning_rate,

@@ -23,6 +23,9 @@ class EngineConfig(BaseModel):
     personalization_window_days: int = 30
     personalization_min_feedback_events: int = 4
     personalization_preference_margin: float = 2.0
+    personalization_inferred_ttl_days: int = 45
+    personalization_inferred_refresh_days: int = 14
+    personalization_lifecycle_check_interval_seconds: int = 30
 
     # Cold-start priors used before enough feedback is available.
     persistent_confidence_prior: float = 0.60
@@ -88,11 +91,31 @@ class EngineConfig(BaseModel):
             raise ValueError(msg)
         return value
 
-    @field_validator("personalization_window_days", "personalization_min_feedback_events")
+    @field_validator(
+        "personalization_window_days",
+        "personalization_min_feedback_events",
+        "personalization_inferred_ttl_days",
+    )
     @classmethod
     def validate_positive_integer_tunables(cls, value: int) -> int:
         if value <= 0:
             msg = "personalization tunables must be positive"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("personalization_inferred_refresh_days")
+    @classmethod
+    def validate_non_negative_refresh_days(cls, value: int) -> int:
+        if value < 0:
+            msg = "personalization_inferred_refresh_days must be >= 0"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("personalization_lifecycle_check_interval_seconds")
+    @classmethod
+    def validate_non_negative_lifecycle_interval(cls, value: int) -> int:
+        if value < 0:
+            msg = "personalization_lifecycle_check_interval_seconds must be >= 0"
             raise ValueError(msg)
         return value
 
@@ -136,6 +159,18 @@ class EngineConfig(BaseModel):
             ),
             personalization_preference_margin=float(
                 os.getenv("MDE_PERSONALIZATION_PREFERENCE_MARGIN", "2.0")
+            ),
+            personalization_inferred_ttl_days=int(
+                os.getenv("MDE_PERSONALIZATION_INFERRED_TTL_DAYS", "45")
+            ),
+            personalization_inferred_refresh_days=int(
+                os.getenv("MDE_PERSONALIZATION_INFERRED_REFRESH_DAYS", "14")
+            ),
+            personalization_lifecycle_check_interval_seconds=int(
+                os.getenv(
+                    "MDE_PERSONALIZATION_LIFECYCLE_CHECK_INTERVAL_SECONDS",
+                    "30",
+                )
             ),
             persistent_confidence_prior=float(
                 os.getenv("MDE_PERSISTENT_CONFIDENCE_PRIOR", "0.60")

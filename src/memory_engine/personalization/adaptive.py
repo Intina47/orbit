@@ -22,6 +22,7 @@ class InferredMemoryCandidate:
     summary: str
     confidence: float
     metadata: dict[str, Any] = field(default_factory=dict)
+    supersedes_memory_ids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -30,6 +31,14 @@ class _PreferenceState:
     detailed_score: float = 0.0
     updates: int = 0
     last_emitted: str | None = None
+    concise_supporting_ids: list[str] = field(default_factory=list)
+    detailed_supporting_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _SignatureReservation:
+    signature: str
+    supersedes_memory_ids: tuple[str, ...] = ()
 
 
 class AdaptivePersonalizationEngine:
@@ -98,6 +107,8 @@ class AdaptivePersonalizationEngine:
         window_days: int = 30,
         min_feedback_events: int = 4,
         preference_margin: float = 2.0,
+        inferred_ttl_days: int = 45,
+        inferred_refresh_days: int = 14,
     ) -> None:
         self._storage = storage
         self._enabled = enabled
@@ -106,7 +117,9 @@ class AdaptivePersonalizationEngine:
         self._window_days = max(window_days, 1)
         self._min_feedback_events = max(min_feedback_events, 1)
         self._preference_margin = max(preference_margin, 0.1)
-        self._emitted_signatures: set[str] = set()
+        self._inferred_ttl_days = max(inferred_ttl_days, 1)
+        self._inferred_refresh_days = max(inferred_refresh_days, 0)
+        self._emitted_signatures: dict[str, datetime] = {}
         self._preference_state_by_entity: dict[str, _PreferenceState] = {}
         self._lock = threading.RLock()
 
@@ -177,12 +190,12 @@ class AdaptivePersonalizationEngine:
             return None
 
         topic_summary = self._representative_summary(cluster)
-        signature = self._reserve_signature(
+        reservation = self._reserve_signature(
             entity_id=entity_id,
             inference_type="repeat_question_cluster",
             topic_summary=topic_summary,
         )
-        if signature is None:
+        if reservation is None:
             return None
 
         confidence = min(
@@ -197,7 +210,7 @@ class AdaptivePersonalizationEngine:
             f"{entity_id}->pattern:repeat_question_cluster",
             "inferred:true",
             "inference_type:repeat_question_cluster",
-            f"signature:{signature}",
+            f"signature:{reservation.signature}",
         ]
         relationships.extend(f"derived_from:{memory_id}" for memory_id in supporting_ids)
         content = (
@@ -219,6 +232,7 @@ class AdaptivePersonalizationEngine:
                 "relationships": relationships,
                 "inference_type": "repeat_question_cluster",
             },
+            supersedes_memory_ids=reservation.supersedes_memory_ids,
         )
 
     def _infer_recurring_failure(
@@ -247,12 +261,12 @@ class AdaptivePersonalizationEngine:
             return None
 
         topic_summary = self._representative_summary(cluster)
-        signature = self._reserve_signature(
+        reservation = self._reserve_signature(
             entity_id=entity_id,
             inference_type="recurring_failure_pattern",
             topic_summary=topic_summary,
         )
-        if signature is None:
+        if reservation is None:
             return None
 
         confidence = min(
@@ -267,7 +281,7 @@ class AdaptivePersonalizationEngine:
             f"{entity_id}->pattern:recurring_failure",
             "inferred:true",
             "inference_type:recurring_failure_pattern",
-            f"signature:{signature}",
+            f"signature:{reservation.signature}",
         ]
         relationships.extend(f"derived_from:{memory_id}" for memory_id in supporting_ids)
         content = (
@@ -289,6 +303,7 @@ class AdaptivePersonalizationEngine:
                 "relationships": relationships,
                 "inference_type": "recurring_failure_pattern",
             },
+            supersedes_memory_ids=reservation.supersedes_memory_ids,
         )
 
     def _infer_progress_accumulation(
@@ -317,12 +332,12 @@ class AdaptivePersonalizationEngine:
             return None
 
         topic_summary = self._representative_summary(cluster)
-        signature = self._reserve_signature(
+        reservation = self._reserve_signature(
             entity_id=entity_id,
             inference_type="progress_accumulation",
             topic_summary=topic_summary,
         )
-        if signature is None:
+        if reservation is None:
             return None
 
         confidence = min(
@@ -337,7 +352,7 @@ class AdaptivePersonalizationEngine:
             f"{entity_id}->progress:accumulated_mastery",
             "inferred:true",
             "inference_type:progress_accumulation",
-            f"signature:{signature}",
+            f"signature:{reservation.signature}",
         ]
         relationships.extend(f"derived_from:{memory_id}" for memory_id in supporting_ids)
         content = (
@@ -358,6 +373,7 @@ class AdaptivePersonalizationEngine:
                 "relationships": relationships,
                 "inference_type": "progress_accumulation",
             },
+            supersedes_memory_ids=reservation.supersedes_memory_ids,
         )
 
     def observe_feedback(
@@ -384,6 +400,7 @@ class AdaptivePersonalizationEngine:
                 entity_id=entity_id,
                 style=style,
                 signal=abs(outcome_signal),
+                source_memory_id=memory.memory_id,
             )
             if candidate is not None:
                 candidates.append(candidate)
@@ -416,43 +433,104 @@ class AdaptivePersonalizationEngine:
         entity_id: str,
         inference_type: str,
         topic_summary: str,
-    ) -> str | None:
+    ) -> _SignatureReservation | None:
+        now = datetime.now(UTC)
+        refresh_window = timedelta(days=self._inferred_refresh_days)
         signature = self._signature(
             entity_id=entity_id,
             inference_type=inference_type,
             topic_summary=topic_summary,
         )
         with self._lock:
-            if signature in self._emitted_signatures:
+            last_emitted_at = self._emitted_signatures.get(signature)
+            if (
+                last_emitted_at is not None
+                and now - last_emitted_at < refresh_window
+            ):
                 return None
-            if self._signature_exists_in_storage(entity_id=entity_id, signature=signature):
-                self._emitted_signatures.add(signature)
-                return None
-            self._emitted_signatures.add(signature)
-        return signature
 
-    def _signature_exists_in_storage(self, *, entity_id: str, signature: str) -> bool:
+        existing = self._signature_memories_in_storage(
+            entity_id=entity_id,
+            signature=signature,
+        )
+        if existing:
+            freshest = max(existing, key=lambda memory: memory.created_at)
+            if now - freshest.created_at < refresh_window:
+                with self._lock:
+                    self._emitted_signatures[signature] = now
+                return None
+            supersedes = tuple(memory.memory_id for memory in existing)
+        else:
+            supersedes = ()
+
+        with self._lock:
+            self._emitted_signatures[signature] = now
+        return _SignatureReservation(
+            signature=signature,
+            supersedes_memory_ids=supersedes,
+        )
+
+    def _signature_memories_in_storage(
+        self,
+        *,
+        entity_id: str,
+        signature: str,
+    ) -> list[MemoryRecord]:
         signature_marker = f"signature:{signature}"
+        matches: list[MemoryRecord] = []
         for memory in self._storage.list_memories():
             if entity_id not in memory.entities:
                 continue
             if signature_marker in memory.relationships:
-                return True
-        return False
+                matches.append(memory)
+        return matches
+
+    def expired_inferred_memory_ids(self) -> list[str]:
+        if not self._enabled:
+            return []
+        cutoff = datetime.now(UTC) - timedelta(days=self._inferred_ttl_days)
+        expired: list[str] = []
+        for memory in self._storage.list_memories():
+            if not self._is_inferred_memory(memory):
+                continue
+            if memory.created_at < cutoff:
+                expired.append(memory.memory_id)
+        return expired
+
+    def notify_memories_deleted(self, memories: list[MemoryRecord]) -> None:
+        if not memories:
+            return
+        signatures: set[str] = set()
+        for memory in memories:
+            signatures.update(self._signatures_for_memory(memory))
+        if not signatures:
+            return
+        with self._lock:
+            for signature in signatures:
+                self._emitted_signatures.pop(signature, None)
 
     def _update_preference_state(
         self,
         entity_id: str,
         style: str,
         signal: float,
+        source_memory_id: str,
     ) -> InferredMemoryCandidate | None:
         delta = max(signal, 0.1)
         with self._lock:
             state = self._preference_state_by_entity.setdefault(entity_id, _PreferenceState())
             if style == "concise":
                 state.concise_score += delta
+                self._append_unique_limited(
+                    state.concise_supporting_ids,
+                    source_memory_id,
+                )
             else:
                 state.detailed_score += delta
+                self._append_unique_limited(
+                    state.detailed_supporting_ids,
+                    source_memory_id,
+                )
             state.updates += 1
 
             if state.updates < self._min_feedback_events:
@@ -461,11 +539,31 @@ class AdaptivePersonalizationEngine:
             if abs(margin) < self._preference_margin:
                 return None
             preferred_style = "concise" if margin > 0 else "detailed"
+            explicit_style = self._explicit_style_preference(entity_id)
+            if (
+                explicit_style is not None
+                and explicit_style != preferred_style
+                and abs(margin) < (self._preference_margin * 4.0)
+            ):
+                preferred_style = explicit_style
             if state.last_emitted == preferred_style:
                 return None
             state.last_emitted = preferred_style
+            supporting_ids = (
+                list(state.concise_supporting_ids)
+                if preferred_style == "concise"
+                else list(state.detailed_supporting_ids)
+            )
+        derived_from_ids = [memory_id for memory_id in supporting_ids[-8:] if memory_id]
+        if not derived_from_ids and source_memory_id:
+            derived_from_ids = [source_memory_id]
 
         confidence = min(0.95, 0.62 + min(abs(margin) / 8.0, 0.3))
+        signature = self._signature(
+            entity_id=entity_id,
+            inference_type="feedback_preference_shift",
+            topic_summary=preferred_style,
+        )
         if preferred_style == "concise":
             summary = f"{entity_id} prefers concise explanations"
             content = (
@@ -478,6 +576,15 @@ class AdaptivePersonalizationEngine:
                 f"Inferred preference: {entity_id} responds better to detailed explanations. "
                 "Include fuller context, rationale, and worked examples."
             )
+        relationships = [
+            f"{entity_id}->preference:explanation_style={preferred_style}",
+            "inferred:true",
+            "inference_type:feedback_preference_shift",
+            f"signature:{signature}",
+        ]
+        relationships.extend(
+            f"derived_from:{memory_id}" for memory_id in derived_from_ids
+        )
         return InferredMemoryCandidate(
             entity_id=entity_id,
             event_type="inferred_preference",
@@ -489,12 +596,67 @@ class AdaptivePersonalizationEngine:
                 "intent": "inferred_preference",
                 "summary": summary,
                 "entities": [entity_id],
-                "relationships": [
-                    f"{entity_id}->preference:explanation_style={preferred_style}"
-                ],
+                "relationships": relationships,
                 "inference_type": "feedback_preference_shift",
             },
         )
+
+    @staticmethod
+    def _append_unique_limited(
+        values: list[str],
+        value: str,
+        *,
+        limit: int = 16,
+    ) -> None:
+        normalized = value.strip()
+        if not normalized:
+            return
+        if normalized in values:
+            values.remove(normalized)
+        values.append(normalized)
+        if len(values) > limit:
+            del values[: len(values) - limit]
+
+    def _explicit_style_preference(self, entity_id: str) -> str | None:
+        candidates = sorted(
+            self._storage.list_memories(),
+            key=lambda memory: memory.created_at,
+            reverse=True,
+        )
+        for memory in candidates:
+            if entity_id not in memory.entities:
+                continue
+            intent = memory.intent.strip().lower()
+            if intent not in {"preference_stated", "user_profile", "user_fact"}:
+                continue
+            style = self._style_preference_from_text(
+                f"{memory.summary} {memory.content}".lower()
+            )
+            if style is not None:
+                return style
+        return None
+
+    @staticmethod
+    def _style_preference_from_text(text: str) -> str | None:
+        concise_markers = (
+            "concise",
+            "short",
+            "brief",
+            "compact",
+        )
+        detailed_markers = (
+            "detailed",
+            "fuller context",
+            "step-by-step",
+            "in-depth",
+        )
+        has_concise = any(marker in text for marker in concise_markers)
+        has_detailed = any(marker in text for marker in detailed_markers)
+        if has_detailed and not has_concise:
+            return "detailed"
+        if has_concise and not has_detailed:
+            return "concise"
+        return None
 
     def _topic_cluster(
         self,
@@ -629,15 +791,47 @@ class AdaptivePersonalizationEngine:
                 return True
         return False
 
+    @staticmethod
+    def _signatures_for_memory(memory: MemoryRecord) -> set[str]:
+        signatures: set[str] = set()
+        for relation in memory.relationships:
+            normalized = relation.strip()
+            if normalized.startswith("signature:"):
+                signatures.add(normalized.removeprefix("signature:"))
+        return signatures
+
     def _relaxed_similarity_threshold(self) -> float:
         return max(0.1, self._similarity_threshold * 0.12)
 
     @staticmethod
     def _style_bucket(memory: MemoryRecord) -> str:
-        size = len(memory.content.split())
-        if size <= 160:
+        text = memory.content.lower().strip()
+        summary_text = memory.summary.lower().strip()
+        if not text:
+            text = summary_text
+        if any(
+            marker in text
+            for marker in (
+                "fuller context",
+                "worked examples",
+                "postmortem",
+                "regression tests",
+                "step-by-step",
+            )
+        ):
+            return "detailed"
+        word_count = len(text.split())
+        sentence_count = text.count(".") + text.count("!") + text.count("?")
+        if word_count <= 32 and sentence_count <= 2:
             return "concise"
-        return "detailed"
+        if word_count >= 36 or sentence_count >= 3:
+            return "detailed"
+        if any(
+            marker in summary_text
+            for marker in ("fuller context", "worked examples", "regression tests")
+        ):
+            return "detailed"
+        return "concise"
 
     @staticmethod
     def _is_assistant_intent(intent: str) -> bool:

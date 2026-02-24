@@ -56,6 +56,10 @@ Evaluation harness (baseline vs Orbit):
 
 - `python scripts/run_orbit_eval.py --output-dir eval_reports/latest`
 
+Long-horizon personalization soak (hard gate matrix + failed traces):
+
+- `python scripts/soak_personalization.py --output-dir soak_reports/latest --sqlite-path tmp/orbit_soak.db --turns-per-persona 500`
+
 ## Core Quality Gates
 
 ```bash

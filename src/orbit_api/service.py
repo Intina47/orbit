@@ -333,6 +333,10 @@ class OrbitApiService:
             ranked=ranked,
             candidates=candidates,
         )
+        ranked = self._promote_primary_candidate_for_query(
+            query=request.query,
+            ranked=ranked,
+        )
         selected = self._select_with_intent_caps(
             ranked,
             top_k=request.limit,
@@ -524,6 +528,7 @@ class OrbitApiService:
         rank_position: int,
         rank_score: float,
     ) -> Memory:
+        inference_provenance = self._inference_provenance(record)
         return Memory(
             memory_id=record.memory_id,
             content=record.content,
@@ -537,11 +542,43 @@ class OrbitApiService:
                 "entities": record.entities,
                 "relationships": record.relationships,
                 "storage_tier": record.storage_tier.value,
+                "inference_provenance": inference_provenance,
             },
             relevance_explanation=(
                 "Ranked by semantic similarity + learned relevance model."
             ),
         )
+
+    @classmethod
+    def _inference_provenance(cls, record: MemoryRecord) -> dict[str, Any]:
+        relationships = [str(item).strip() for item in record.relationships]
+        inference_type = cls._relationship_value(
+            relationships,
+            prefix="inference_type:",
+        )
+        signature = cls._relationship_value(relationships, prefix="signature:")
+        derived_from_ids = cls._relationship_values(relationships, prefix="derived_from:")
+        supersedes_ids = cls._relationship_values(relationships, prefix="supersedes:")
+
+        is_inferred = cls._is_inferred_memory_record(
+            record=record,
+            relationships=relationships,
+            inference_type=inference_type,
+        )
+        why = cls._inference_reason(
+            record=record,
+            is_inferred=is_inferred,
+            inference_type=inference_type,
+        )
+        return {
+            "is_inferred": is_inferred,
+            "why": why,
+            "when": record.created_at.isoformat() if is_inferred else None,
+            "inference_type": inference_type,
+            "signature": signature,
+            "derived_from_memory_ids": derived_from_ids,
+            "supersedes_memory_ids": supersedes_ids,
+        }
 
     def _filter_candidates(
         self,
@@ -584,7 +621,10 @@ class OrbitApiService:
         if not ranked:
             return ranked
         normalized_query = query.strip().lower()
-        mistake_focused = self._is_mistake_pattern_query(normalized_query)
+        query_focus = self._query_focus(normalized_query)
+        style_focused = query_focus == "style"
+        mistake_focused = query_focus == "mistake"
+        progress_focused = query_focus == "progress"
         recency_focused = self._is_recency_or_progress_query(normalized_query)
         latest_progress = self._latest_progress_candidate(candidates)
         has_advancement_signal = (
@@ -594,15 +634,51 @@ class OrbitApiService:
 
         reweighted: list[Any] = []
         for item in ranked:
-            intent = item.memory.intent.strip().lower()
+            memory = item.memory
+            intent = memory.intent.strip().lower()
+            inference_type = self._memory_inference_type(memory)
+            text = self._memory_text(memory)
             multiplier = 1.0
+
+            if style_focused:
+                if self._is_style_candidate(memory):
+                    multiplier *= 2.25
+                elif intent == "learning_progress":
+                    multiplier *= 0.72
+                elif intent == "inferred_learning_pattern":
+                    multiplier *= 0.58
+                elif intent.startswith("assistant_"):
+                    multiplier *= 0.62
+
             if mistake_focused:
                 if intent == "inferred_learning_pattern":
-                    multiplier *= 1.9
+                    if inference_type == "recurring_failure_pattern":
+                        multiplier *= 2.7
+                    elif self._contains_failure_signal(text):
+                        multiplier *= 1.7
+                    else:
+                        multiplier *= 0.42
+                elif intent == "user_attempt":
+                    multiplier *= 1.55 if self._contains_failure_signal(text) else 1.1
                 elif intent == "learning_progress":
-                    multiplier *= 1.15
+                    multiplier *= 0.74
+                elif self._intent_bucket(intent) == "profile":
+                    multiplier *= 0.55
                 elif intent.startswith("assistant_"):
-                    multiplier *= 0.85
+                    multiplier *= 0.62
+
+            if progress_focused:
+                if intent == "learning_progress":
+                    if inference_type == "progress_accumulation":
+                        multiplier *= 2.55
+                    else:
+                        multiplier *= 2.25
+                elif self._intent_bucket(intent) == "profile":
+                    multiplier *= 0.48
+                elif intent == "inferred_learning_pattern":
+                    multiplier *= 0.56
+                elif intent.startswith("assistant_"):
+                    multiplier *= 0.67
 
             if (
                 has_advancement_signal
@@ -616,6 +692,142 @@ class OrbitApiService:
 
         reweighted.sort(key=lambda item: item.rank_score, reverse=True)
         return reweighted
+
+    def _query_focus(self, query: str) -> str:
+        normalized_query = query.strip().lower()
+        if self._is_style_or_format_query(normalized_query):
+            return "style"
+        if self._is_mistake_pattern_query(normalized_query):
+            return "mistake"
+        if (
+            self._is_architecture_or_progress_query(normalized_query)
+            or self._is_recency_or_progress_query(normalized_query)
+        ):
+            return "progress"
+        return "generic"
+
+    def _promote_primary_candidate_for_query(
+        self,
+        *,
+        query: str,
+        ranked: list[Any],
+    ) -> list[Any]:
+        if len(ranked) < 2:
+            return ranked
+        query_focus = self._query_focus(query)
+        if query_focus == "generic":
+            return ranked
+
+        preferred_index: int | None = None
+        for idx, item in enumerate(ranked):
+            memory = item.memory
+            if query_focus == "style" and self._is_style_candidate(memory):
+                preferred_index = idx
+                break
+            if query_focus == "mistake" and self._is_mistake_candidate(memory):
+                preferred_index = idx
+                break
+            if query_focus == "progress" and self._is_progress_candidate(memory):
+                preferred_index = idx
+                break
+        if preferred_index is None or preferred_index == 0:
+            return ranked
+
+        promoted = list(ranked)
+        promoted_item = promoted.pop(preferred_index)
+        promoted.insert(0, promoted_item)
+        if len(promoted) > 1 and promoted[0].rank_score <= promoted[1].rank_score:
+            bumped = promoted[1].rank_score + 1e-6
+            promoted[0] = promoted[0].model_copy(update={"rank_score": bumped})
+        return promoted
+
+    def _memory_inference_type(self, memory: MemoryRecord) -> str | None:
+        return self._relationship_value(memory.relationships, prefix="inference_type:")
+
+    @staticmethod
+    def _memory_text(memory: MemoryRecord) -> str:
+        return f"{memory.summary} {memory.content}".strip().lower()
+
+    @staticmethod
+    def _contains_failure_signal(text: str) -> bool:
+        failure_terms = {
+            "error",
+            "errors",
+            "exception",
+            "failed",
+            "failing",
+            "failure",
+            "wrong",
+            "mistake",
+            "mistakes",
+            "struggle",
+            "struggles",
+            "confuse",
+            "confused",
+            "confuses",
+            "confusing",
+            "bug",
+            "bugs",
+            "typeerror",
+        }
+        text_terms = set(re.findall(r"[a-z0-9]+", text.lower()))
+        return bool(text_terms.intersection(failure_terms))
+
+    def _is_style_candidate(self, memory: MemoryRecord) -> bool:
+        intent = memory.intent.strip().lower()
+        if intent not in {"preference_stated", "inferred_preference"}:
+            return False
+        text = self._memory_text(memory)
+        style_markers = (
+            "concise",
+            "short",
+            "detailed",
+            "step-by-step",
+            "style",
+            "format",
+        )
+        return any(marker in text for marker in style_markers)
+
+    def _is_mistake_candidate(self, memory: MemoryRecord) -> bool:
+        intent = memory.intent.strip().lower()
+        text = self._memory_text(memory)
+        if intent == "user_attempt":
+            return self._contains_failure_signal(text)
+        if intent != "inferred_learning_pattern":
+            return False
+        inference_type = self._memory_inference_type(memory)
+        if inference_type == "recurring_failure_pattern":
+            return True
+        return self._contains_failure_signal(text)
+
+    def _is_progress_candidate(self, memory: MemoryRecord) -> bool:
+        if memory.intent.strip().lower() != "learning_progress":
+            return False
+        text = self._memory_text(memory)
+        stale_markers = (
+            "profile_old",
+            "absolute beginner",
+            "beginner",
+            "novice",
+            "new to coding",
+            "newbie",
+        )
+        return not any(marker in text for marker in stale_markers)
+
+    def _is_inferred_progress_memory(self, memory: MemoryRecord) -> bool:
+        if memory.intent.strip().lower() != "learning_progress":
+            return False
+        inference_type = self._memory_inference_type(memory)
+        if inference_type == "progress_accumulation":
+            return True
+        relationships = [str(item).strip() for item in memory.relationships]
+        if self._is_inferred_memory_record(
+            record=memory,
+            relationships=relationships,
+            inference_type=inference_type,
+        ):
+            return memory.content.strip().lower().startswith("inferred progress:")
+        return False
 
     @staticmethod
     def _is_mistake_pattern_query(query: str) -> bool:
@@ -637,6 +849,7 @@ class OrbitApiService:
             "bugs",
             "confuse",
             "confused",
+            "confuses",
             "confusing",
             "failing",
             "fails",
@@ -753,12 +966,17 @@ class OrbitApiService:
             selected.append(item)
             bucket_counts[bucket] = current_count + 1
             if len(selected) >= top_k:
-                return selected
+                break
         for item in deferred:
             if len(selected) >= top_k:
                 break
             selected.append(item)
-        return selected
+        return self._ensure_inferred_probe_coverage(
+            query=query,
+            ranked=ranked,
+            selected=selected,
+            top_k=top_k,
+        )
 
     def _intent_bucket_caps(
         self,
@@ -767,17 +985,148 @@ class OrbitApiService:
         query: str,
         assistant_cap: int,
     ) -> dict[str, int]:
+        query_focus = self._query_focus(query)
         profile_cap = min(top_k, max(2, int(top_k * 0.6)))
-        if self._is_style_or_format_query(query):
+        pattern_cap = 1
+        progress_cap = top_k
+        attempt_cap = 1
+        if query_focus == "style":
             profile_cap = top_k
+            pattern_cap = 0
+            progress_cap = 1
+            attempt_cap = 0
+        elif query_focus == "mistake":
+            profile_cap = 1
+            pattern_cap = top_k
+            progress_cap = 1
+            attempt_cap = min(2, top_k)
+        elif query_focus == "progress":
+            profile_cap = 0
+            pattern_cap = 0
+            progress_cap = top_k
+            attempt_cap = 0
         elif self._is_architecture_or_progress_query(query):
             profile_cap = 1
-        pattern_cap = 2 if self._is_mistake_pattern_query(query) else 1
+            progress_cap = top_k
+        elif self._is_mistake_pattern_query(query):
+            pattern_cap = min(2, top_k)
+            attempt_cap = 1
         return {
             "assistant": assistant_cap,
             "profile": profile_cap,
             "pattern": min(pattern_cap, top_k),
+            "progress": min(progress_cap, top_k),
+            "attempt": min(attempt_cap, top_k),
         }
+
+    def _ensure_inferred_probe_coverage(
+        self,
+        *,
+        query: str,
+        ranked: list[Any],
+        selected: list[Any],
+        top_k: int,
+    ) -> list[Any]:
+        if not selected:
+            return selected
+        query_focus = self._query_focus(query.strip().lower())
+        if query_focus == "progress":
+            return self._ensure_inferred_progress_slot(
+                ranked=ranked,
+                selected=selected,
+                top_k=top_k,
+            )
+        if query_focus == "style":
+            return self._ensure_inferred_preference_slot(
+                ranked=ranked,
+                selected=selected,
+                top_k=top_k,
+            )
+        return selected
+
+    def _ensure_inferred_progress_slot(
+        self,
+        *,
+        ranked: list[Any],
+        selected: list[Any],
+        top_k: int,
+    ) -> list[Any]:
+        if any(self._is_inferred_progress_memory(item.memory) for item in selected):
+            return selected
+        replacement = self._first_ranked_not_selected(
+            ranked=ranked,
+            selected=selected,
+            predicate=lambda item: self._is_inferred_progress_memory(item.memory),
+        )
+        if replacement is None:
+            return selected
+        return self._replace_selected_tail(
+            selected=selected,
+            replacement=replacement,
+            top_k=top_k,
+            preferred_predicate=lambda item: item.memory.intent.strip().lower()
+            == "learning_progress",
+        )
+
+    def _ensure_inferred_preference_slot(
+        self,
+        *,
+        ranked: list[Any],
+        selected: list[Any],
+        top_k: int,
+    ) -> list[Any]:
+        if any(
+            item.memory.intent.strip().lower() == "inferred_preference"
+            for item in selected
+        ):
+            return selected
+        replacement = self._first_ranked_not_selected(
+            ranked=ranked,
+            selected=selected,
+            predicate=lambda item: item.memory.intent.strip().lower()
+            == "inferred_preference",
+        )
+        if replacement is None:
+            return selected
+        return self._replace_selected_tail(
+            selected=selected,
+            replacement=replacement,
+            top_k=top_k,
+            preferred_predicate=lambda item: item.memory.intent.strip().lower()
+            in {"preference_stated", "user_profile", "user_fact"},
+        )
+
+    @staticmethod
+    def _replace_selected_tail(
+        *,
+        selected: list[Any],
+        replacement: Any,
+        top_k: int,
+        preferred_predicate: Callable[[Any], bool],
+    ) -> list[Any]:
+        updated = list(selected)
+        replace_index = len(updated) - 1
+        for index in range(len(updated) - 1, -1, -1):
+            if preferred_predicate(updated[index]):
+                replace_index = index
+                break
+        updated[replace_index] = replacement
+        return updated[:top_k]
+
+    @staticmethod
+    def _first_ranked_not_selected(
+        *,
+        ranked: list[Any],
+        selected: list[Any],
+        predicate: Callable[[Any], bool],
+    ) -> Any | None:
+        selected_ids = {item.memory.memory_id for item in selected}
+        for item in ranked:
+            if item.memory.memory_id in selected_ids:
+                continue
+            if predicate(item):
+                return item
+        return None
 
     @staticmethod
     def _is_architecture_or_progress_query(query: str) -> bool:
@@ -872,6 +1221,8 @@ class OrbitApiService:
             return "assistant"
         if normalized == "learning_progress":
             return "progress"
+        if normalized == "user_attempt":
+            return "attempt"
         if normalized == "inferred_learning_pattern":
             return "pattern"
         if normalized in {
@@ -886,6 +1237,81 @@ class OrbitApiService:
     @staticmethod
     def _is_assistant_intent(intent: str) -> bool:
         return intent.strip().lower().startswith("assistant_")
+
+    @staticmethod
+    def _relationship_value(relationships: list[str], prefix: str) -> str | None:
+        for relation in relationships:
+            if relation.startswith(prefix):
+                value = relation.removeprefix(prefix).strip()
+                if value:
+                    return value
+        return None
+
+    @staticmethod
+    def _relationship_values(relationships: list[str], prefix: str) -> list[str]:
+        values: list[str] = []
+        seen: set[str] = set()
+        for relation in relationships:
+            if not relation.startswith(prefix):
+                continue
+            value = relation.removeprefix(prefix).strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            values.append(value)
+        return values
+
+    @staticmethod
+    def _is_inferred_memory_record(
+        *,
+        record: MemoryRecord,
+        relationships: list[str],
+        inference_type: str | None,
+    ) -> bool:
+        normalized_intent = record.intent.strip().lower()
+        if normalized_intent.startswith("inferred_"):
+            return True
+        if inference_type:
+            return True
+        if any(relation.strip().lower() == "inferred:true" for relation in relationships):
+            return True
+        return record.content.strip().lower().startswith("inferred ")
+
+    @staticmethod
+    def _inference_reason(
+        *,
+        record: MemoryRecord,
+        is_inferred: bool,
+        inference_type: str | None,
+    ) -> str | None:
+        if not is_inferred:
+            return None
+        reasons = {
+            "repeat_question_cluster": (
+                "Repeated semantically similar questions/attempts were clustered."
+            ),
+            "recurring_failure_pattern": (
+                "Repeated failure/error signals were detected across related attempts."
+            ),
+            "progress_accumulation": (
+                "Repeated positive progress/assessment signals indicated skill advancement."
+            ),
+            "feedback_preference_shift": (
+                "Feedback trends indicated a stable response-style preference."
+            ),
+        }
+        if inference_type in reasons:
+            return reasons[inference_type]
+        intent = record.intent.strip().lower()
+        if intent == "inferred_preference":
+            return reasons["feedback_preference_shift"]
+        if intent == "inferred_learning_pattern":
+            return "Adaptive personalization inferred a recurring learning pattern."
+        if intent == "learning_progress" and record.content.strip().lower().startswith(
+            "inferred progress:"
+        ):
+            return reasons["progress_accumulation"]
+        return "Derived by adaptive personalization from prior memory signals."
 
     def _consume_quota(
         self, account_key: str, kind: str, amount: int

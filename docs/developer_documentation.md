@@ -119,6 +119,9 @@ These inferred memories are stored as regular memories and appear in normal retr
 | `MDE_PERSONALIZATION_WINDOW_DAYS` | `30` | Pattern observation window |
 | `MDE_PERSONALIZATION_MIN_FEEDBACK_EVENTS` | `4` | Feedback count needed for preference inference |
 | `MDE_PERSONALIZATION_PREFERENCE_MARGIN` | `2.0` | Confidence margin before writing preference |
+| `MDE_PERSONALIZATION_INFERRED_TTL_DAYS` | `45` | TTL for inferred memories before lifecycle expiry |
+| `MDE_PERSONALIZATION_INFERRED_REFRESH_DAYS` | `14` | Minimum age before same-signature inferred memory can be refreshed/superseded |
+| `MDE_PERSONALIZATION_LIFECYCLE_CHECK_INTERVAL_SECONDS` | `30` | Frequency of inferred-memory lifecycle scans (`0` = scan each write/feedback) |
 
 ## FastAPI Integration Pattern
 
@@ -249,6 +252,30 @@ curl -X POST http://localhost:8000/v1/ingest \
 ```bash
 curl "http://localhost:8000/v1/retrieve?query=What%20should%20I%20know%20about%20alice?&entity_id=alice&limit=5" \
   -H "Authorization: Bearer <jwt-token>"
+```
+
+Retrieve results include normalized inference provenance for debugging:
+
+```json
+{
+  "memories": [
+    {
+      "memory_id": "mem_123",
+      "metadata": {
+        "intent": "inferred_learning_pattern",
+        "inference_provenance": {
+          "is_inferred": true,
+          "why": "Repeated failure/error signals were detected across related attempts.",
+          "when": "2026-02-23T18:20:00+00:00",
+          "inference_type": "recurring_failure_pattern",
+          "signature": "alice|recurring_failure_pattern|list indexing",
+          "derived_from_memory_ids": ["mem_a", "mem_b"],
+          "supersedes_memory_ids": ["mem_old_1"]
+        }
+      }
+    }
+  ]
+}
 ```
 
 ### Feedback example
@@ -414,6 +441,33 @@ Key tracked metrics:
 - `Predicted helpfulness rate`
 - `Assistant noise rate`
 - `Stale memory rate`
+
+## Long-Horizon Soak Harness (Personalization Under Load)
+
+Run the soak harness to stress personalization over long conversations (4 personas, 500-1000 turns each) with hard pass/fail gates:
+
+```bash
+python scripts/soak_personalization.py \
+  --output-dir soak_reports/latest \
+  --sqlite-path tmp/orbit_soak.db \
+  --turns-per-persona 500
+```
+
+Artifacts produced:
+
+- `personalization_soak_report.json`
+- `personalization_soak_report.md`
+
+Hard gate matrix includes:
+
+- `precision_at_5`
+- `top1_relevant_rate`
+- `stale_memory_rate`
+- `assistant_noise_rate`
+- `provenance_type_coverage`
+- `provenance_derived_from_coverage`
+
+The JSON/Markdown reports include concrete failed retrieval traces with top-5 payloads and inference provenance.
 
 ## Troubleshooting
 
