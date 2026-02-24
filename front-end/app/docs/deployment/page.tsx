@@ -61,6 +61,36 @@ export default function DeploymentPage() {
         ))}
       </div>
 
+      {/* Frontend deployment */}
+      <h2 className="text-2xl font-bold text-foreground mb-4">Vercel frontend setup</h2>
+      <p className="text-muted-foreground text-sm leading-relaxed mb-4">
+        Host the Orbit frontend on Vercel and point it at your Orbit API runtime.
+      </p>
+      <p className="text-muted-foreground text-sm leading-relaxed mb-4">
+        Browser clients never receive the Orbit dashboard bearer token. It stays server-side and is injected by Next.js proxy routes.
+      </p>
+      <CodeBlock
+        code={`NEXT_PUBLIC_ORBIT_API_BASE_URL=https://api.your-orbit-domain.com
+# Optional if different from NEXT_PUBLIC_ORBIT_API_BASE_URL:
+# ORBIT_DASHBOARD_PROXY_BASE_URL=https://api.your-orbit-domain.com
+ORBIT_DASHBOARD_SERVER_BEARER_TOKEN=<orbit-dashboard-service-token>
+ORBIT_DASHBOARD_AUTH_MODE=password
+ORBIT_DASHBOARD_AUTH_PASSWORD=<strong-password>
+ORBIT_DASHBOARD_SESSION_SECRET=<long-random-secret>
+# Optional (seconds):
+# ORBIT_DASHBOARD_SESSION_TTL_SECONDS=43200`}
+        language="bash"
+        filename="front-end/.env.local"
+      />
+      <p className="text-muted-foreground text-sm leading-relaxed mt-4 mb-4">
+        If frontend and API are on different domains, allow your Vercel origin in backend CORS:
+      </p>
+      <CodeBlock
+        code={`ORBIT_CORS_ALLOW_ORIGINS=https://your-app.vercel.app`}
+        language="bash"
+        filename="orbit-api.env"
+      />
+
       {/* Production checklist */}
       <h2 className="text-2xl font-bold text-foreground mb-4">Production checklist</h2>
       <div className="space-y-3 mb-12">
@@ -72,6 +102,7 @@ export default function DeploymentPage() {
           "SLO alerts on latency, 401, 429, and 5xx rates.",
           "Migration command integrated in CI/CD release flow.",
           "Integration tests cover ingest -> retrieve -> feedback loop.",
+          "Vercel frontend env vars are configured and CORS allows your Vercel origin.",
         ].map((item, i) => (
           <div key={i} className="flex items-start gap-3">
             <div className="w-5 h-5 border border-border flex items-center justify-center shrink-0 mt-0.5">

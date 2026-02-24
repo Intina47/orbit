@@ -19,6 +19,10 @@ export default function ApiReferencePage() {
     { method: "GET", path: "/v1/metrics", desc: "Prometheus metrics" },
     { method: "GET", path: "/v1/memories", desc: "List stored memories" },
     { method: "POST", path: "/v1/auth/validate", desc: "JWT validation endpoint" },
+    { method: "POST", path: "/v1/dashboard/keys", desc: "Issue API key (returns plaintext once)" },
+    { method: "GET", path: "/v1/dashboard/keys", desc: "List keys (paginated)" },
+    { method: "POST", path: "/v1/dashboard/keys/{key_id}/revoke", desc: "Revoke one key" },
+    { method: "POST", path: "/v1/dashboard/keys/{key_id}/rotate", desc: "Rotate key (create new + revoke old)" },
   ]
 
   return (
@@ -40,10 +44,10 @@ export default function ApiReferencePage() {
       <div className="border border-primary/30 bg-primary/5 p-6 mb-12">
         <h3 className="text-sm font-bold text-primary mb-2">Authentication</h3>
         <p className="text-xs text-muted-foreground leading-relaxed mb-3">
-          All protected endpoints require <code className="text-primary">Authorization: Bearer {'<token>'}</code>.
+          All protected endpoints require <code className="text-primary">Authorization: Bearer {'<token>'}</code> (JWT or Orbit API key).
         </p>
         <p className="text-xs text-muted-foreground leading-relaxed">
-          Required JWT claims: <code className="text-primary">sub</code>, <code className="text-primary">iat</code>, <code className="text-primary">exp</code>, <code className="text-primary">iss</code>, <code className="text-primary">aud</code>. POST endpoints support idempotency via <code className="text-primary">Idempotency-Key</code>.
+          Required JWT claims: <code className="text-primary">sub</code>, <code className="text-primary">iat</code>, <code className="text-primary">exp</code>, <code className="text-primary">iss</code>, <code className="text-primary">aud</code>. POST endpoints support idempotency via <code className="text-primary">Idempotency-Key</code>. Dashboard key endpoints require write scope (or <code className="text-primary">keys:write</code>).
         </p>
       </div>
 

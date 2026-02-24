@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import numpy as np
 from numpy.typing import NDArray
-from sqlalchemy import create_engine, delete, func, select, text, update
+from sqlalchemy import create_engine, delete, func, inspect, select, text, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
@@ -52,6 +52,7 @@ class SQLAlchemyStorageManager:
             connect_args=connect_args,
         )
         Base.metadata.create_all(self._engine)
+        self._ensure_account_key_column()
         self._session_factory = sessionmaker(
             bind=self._engine,
             autoflush=False,
@@ -60,8 +61,12 @@ class SQLAlchemyStorageManager:
         )
 
     def store(
-        self, encoded_event: EncodedEvent, decision: StorageDecision
+        self,
+        encoded_event: EncodedEvent,
+        decision: StorageDecision,
+        account_key: str = "default",
     ) -> MemoryRecord:
+        normalized_account_key = self._normalize_account_key(account_key)
         memory_id = str(uuid4())
         now = datetime.now(UTC)
         intent = encoded_event.understanding.intent
@@ -70,6 +75,7 @@ class SQLAlchemyStorageManager:
             encoded_event.raw_embedding if self._store_raw_embedding else []
         )
         record = MemoryRecord(
+            account_key=normalized_account_key,
             memory_id=memory_id,
             event_id=encoded_event.event.event_id,
             content=content,
@@ -90,6 +96,7 @@ class SQLAlchemyStorageManager:
             original_count=int(decision.trace.get("original_count", 1)),
         )
         row_payload = {
+            "account_key": record.account_key,
             "memory_id": record.memory_id,
             "event_id": record.event_id,
             "content": record.content,
@@ -117,27 +124,47 @@ class SQLAlchemyStorageManager:
         self._execute_write(_insert)
         return record
 
-    def count_memories(self) -> int:
+    def count_memories(self, account_key: str | None = None) -> int:
         with self._session_factory() as session:
-            result = session.execute(text("SELECT COUNT(*) FROM memories"))
+            if account_key is None:
+                result = session.execute(text("SELECT COUNT(*) FROM memories"))
+            else:
+                normalized_account_key = self._normalize_account_key(account_key)
+                result = session.execute(
+                    text("SELECT COUNT(*) FROM memories WHERE account_key = :account_key"),
+                    {"account_key": normalized_account_key},
+                )
             value = result.scalar_one_or_none()
             return int(value or 0)
 
-    def list_memories(self, limit: int | None = None) -> list[MemoryRecord]:
+    def list_memories(
+        self,
+        limit: int | None = None,
+        account_key: str | None = None,
+    ) -> list[MemoryRecord]:
         with self._session_factory() as session:
             stmt = select(MemoryRow)
+            if account_key is not None:
+                normalized_account_key = self._normalize_account_key(account_key)
+                stmt = stmt.where(MemoryRow.account_key == normalized_account_key)
             if limit is not None:
                 stmt = stmt.limit(limit)
             rows = session.scalars(stmt).all()
         return [self._row_to_memory(row) for row in rows]
 
-    def fetch_by_ids(self, memory_ids: list[str]) -> list[MemoryRecord]:
+    def fetch_by_ids(
+        self,
+        memory_ids: list[str],
+        account_key: str | None = None,
+    ) -> list[MemoryRecord]:
         if not memory_ids:
             return []
         with self._session_factory() as session:
-            rows = session.scalars(
-                select(MemoryRow).where(MemoryRow.memory_id.in_(memory_ids))
-            ).all()
+            stmt = select(MemoryRow).where(MemoryRow.memory_id.in_(memory_ids))
+            if account_key is not None:
+                normalized_account_key = self._normalize_account_key(account_key)
+                stmt = stmt.where(MemoryRow.account_key == normalized_account_key)
+            rows = session.scalars(stmt).all()
         return [self._row_to_memory(row) for row in rows]
 
     def fetch_by_entity_and_intent(
@@ -145,9 +172,13 @@ class SQLAlchemyStorageManager:
         entity_id: str,
         intent: str,
         since_iso: str | None = None,
+        account_key: str | None = None,
     ) -> list[MemoryRecord]:
         with self._session_factory() as session:
             stmt = select(MemoryRow).where(MemoryRow.intent == intent)
+            if account_key is not None:
+                normalized_account_key = self._normalize_account_key(account_key)
+                stmt = stmt.where(MemoryRow.account_key == normalized_account_key)
             if since_iso is not None:
                 since = datetime.fromisoformat(since_iso)
                 stmt = stmt.where(MemoryRow.created_at >= since)
@@ -159,8 +190,9 @@ class SQLAlchemyStorageManager:
         self,
         query_embedding: NDArray[np.float32],
         top_k: int,
+        account_key: str | None = None,
     ) -> list[MemoryRecord]:
-        memories = self.list_memories()
+        memories = self.list_memories(account_key=account_key)
         if not memories:
             return []
         scored: list[tuple[MemoryRecord, float]] = []
@@ -175,12 +207,14 @@ class SQLAlchemyStorageManager:
         scored.sort(key=lambda item: item[1], reverse=True)
         return [memory for memory, _score in scored[:top_k]]
 
-    def update_retrieval(self, memory_id: str) -> None:
+    def update_retrieval(self, memory_id: str, account_key: str | None = None) -> None:
         def _update(session: Session) -> None:
+            stmt = update(MemoryRow).where(MemoryRow.memory_id == memory_id)
+            if account_key is not None:
+                normalized_account_key = self._normalize_account_key(account_key)
+                stmt = stmt.where(MemoryRow.account_key == normalized_account_key)
             session.execute(
-                update(MemoryRow)
-                .where(MemoryRow.memory_id == memory_id)
-                .values(
+                stmt.values(
                     retrieval_count=MemoryRow.retrieval_count + 1,
                     updated_at=datetime.now(UTC),
                 )
@@ -188,9 +222,18 @@ class SQLAlchemyStorageManager:
 
         self._execute_write(_update)
 
-    def update_outcome(self, memory_id: str, outcome_signal: float) -> None:
+    def update_outcome(
+        self,
+        memory_id: str,
+        outcome_signal: float,
+        account_key: str | None = None,
+    ) -> None:
         def _update(session: Session) -> None:
-            row = session.get(MemoryRow, memory_id)
+            stmt = select(MemoryRow).where(MemoryRow.memory_id == memory_id)
+            if account_key is not None:
+                normalized_account_key = self._normalize_account_key(account_key)
+                stmt = stmt.where(MemoryRow.account_key == normalized_account_key)
+            row = session.execute(stmt).scalar_one_or_none()
             if row is None:
                 return
             count = int(row.outcome_count)
@@ -203,14 +246,20 @@ class SQLAlchemyStorageManager:
 
         self._execute_write(_update)
 
-    def delete_memories(self, memory_ids: list[str]) -> None:
+    def delete_memories(
+        self,
+        memory_ids: list[str],
+        account_key: str | None = None,
+    ) -> None:
         if not memory_ids:
             return
 
         def _delete(session: Session) -> None:
-            session.execute(
-                delete(MemoryRow).where(MemoryRow.memory_id.in_(memory_ids))
-            )
+            stmt = delete(MemoryRow).where(MemoryRow.memory_id.in_(memory_ids))
+            if account_key is not None:
+                normalized_account_key = self._normalize_account_key(account_key)
+                stmt = stmt.where(MemoryRow.account_key == normalized_account_key)
+            session.execute(stmt)
 
         self._execute_write(_delete)
 
@@ -242,6 +291,7 @@ class SQLAlchemyStorageManager:
         if not raw_embedding or len(raw_embedding) != len(semantic_embedding):
             raw_embedding = semantic_embedding.copy()
         return MemoryRecord(
+            account_key=str(row.account_key),
             memory_id=str(row.memory_id),
             event_id=str(row.event_id),
             content=str(row.content),
@@ -311,6 +361,30 @@ class SQLAlchemyStorageManager:
     def _is_retryable_lock_error(exc: OperationalError) -> bool:
         text = str(exc).lower()
         return "database is locked" in text or "cannot start a transaction" in text
+
+    def _ensure_account_key_column(self) -> None:
+        inspector = inspect(self._engine)
+        columns = {column["name"] for column in inspector.get_columns("memories")}
+        if "account_key" in columns:
+            return
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE memories "
+                    "ADD COLUMN account_key VARCHAR(128) NOT NULL DEFAULT 'default'"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE memories SET account_key = 'default' "
+                    "WHERE account_key IS NULL OR account_key = ''"
+                )
+            )
+
+    @staticmethod
+    def _normalize_account_key(account_key: str) -> str:
+        normalized = account_key.strip()
+        return normalized or "default"
 
 
 def _to_utc_datetime(value: datetime) -> datetime:

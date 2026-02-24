@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation"
 export function Nav() {
   const pathname = usePathname()
   const isDocs = pathname.startsWith("/docs")
+  const isDashboard = pathname.startsWith("/dashboard")
 
   return (
     <nav className="w-full border-b border-border bg-background/80 backdrop-blur-sm sticky top-0 z-50">
@@ -25,6 +26,12 @@ export function Nav() {
             <Link href="/docs/api-reference" className="hover:text-foreground transition-colors">
               API
             </Link>
+            <Link
+              href="/dashboard"
+              className={`hover:text-foreground transition-colors ${isDashboard ? "text-primary text-glow-sm" : ""}`}
+            >
+              DASHBOARD
+            </Link>
             <Link href="/docs/quickstart" className="hover:text-foreground transition-colors">
               QUICKSTART
             </Link>
@@ -34,7 +41,7 @@ export function Nav() {
           </div>
         </div>
         <div className="flex items-center gap-4">
-          {!isDocs && (
+          {!isDocs && !isDashboard && (
             <div className="hidden md:flex items-center gap-8 text-xs tracking-wider text-muted-foreground">
               <a href="#problem" className="hover:text-foreground transition-colors">PROBLEM</a>
               <a href="#how-it-works" className="hover:text-foreground transition-colors">HOW IT WORKS</a>
@@ -42,10 +49,10 @@ export function Nav() {
             </div>
           )}
           <Link
-            href={isDocs ? "/" : "#cta"}
+            href={isDocs || isDashboard ? "/" : "#cta"}
             className="border border-foreground px-5 py-2 text-foreground text-xs tracking-wider hover:bg-foreground hover:text-background transition-all duration-200"
           >
-            {isDocs ? "HOME" : "START BUILDING"}
+            {isDocs || isDashboard ? "HOME" : "START BUILDING"}
           </Link>
         </div>
       </div>

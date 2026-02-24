@@ -1125,3 +1125,186 @@ Validation:
 - `python -m pytest -q`: PASS
 - `python -m ruff check src/orbit_api/service.py src/memory_engine/engine.py src/memory_engine/personalization/adaptive.py tests/unit/test_orbit_api_service.py`: PASS
 - `python -m pylint src/orbit_api/service.py tests/unit/test_orbit_api_service.py --fail-under=9.0`: PASS (9.87/10)
+
+### 2026-02-24 - Cloud Readiness Phase 1 (Tenant Isolation for Memory Data Plane)
+
+Completed:
+- Added account-level partitioning to memory persistence:
+  - `src/memory_engine/storage/db.py`
+  - `src/decision_engine/models.py`
+  - `migrations/versions/20260221_0001_create_memories_table.py`
+  - `migrations/versions/20260224_0003_add_account_key_to_memories.py`
+- Propagated `account_key` through storage interfaces and implementations:
+  - `src/decision_engine/storage_protocol.py`
+  - `src/decision_engine/storage_manager.py`
+  - `src/decision_engine/storage_sqlalchemy.py`
+- Scoped memory access paths end-to-end in engine + API service:
+  - `src/memory_engine/engine.py`
+  - `src/memory_engine/personalization/adaptive.py`
+  - `src/memory_engine/stage3_learning/loop.py`
+  - `src/memory_engine/storage/retrieval.py`
+  - `src/orbit_api/service.py`
+  - `src/orbit_api/app.py`
+- Enforced tenant boundaries in tests:
+  - `tests/integration/test_orbit_api_integration.py`
+  - `tests/unit/test_orbit_api_service.py`
+  - `tests/integration/test_orbit_api_errors.py` (updated for strict tenant scope + quota behavior)
+  - `tests/unit/test_storage_db.py`
+
+Validation:
+- `python -m pytest tests/unit/test_orbit_api_service.py tests/integration/test_orbit_api_integration.py tests/integration/test_orbit_api_errors.py tests/unit/test_storage_db.py tests/unit/test_storage_sqlalchemy_manager.py tests/integration/test_adaptive_personalization.py tests/integration/test_engine_flow.py tests/unit/test_retrieval_service.py tests/unit/test_storage.py -q`: PASS
+- `python -m ruff check <changed .py files>`: PASS
+- `python -m alembic upgrade head` against temp SQLite DB: PASS (verified `memories.account_key` + `ix_memories_account_key`)
+
+### 2026-02-24 - Cloud Deployment Bundle (GCP Cloud Run) + Dashboard Planning
+
+Completed:
+- Added Cloud Build pipeline for image build/push/deploy:
+  - `cloudbuild.yaml`
+- Added reusable Cloud Run deploy script:
+  - `scripts/deploy_gcp_cloud_run.sh`
+  - supports:
+    - secret-injected `MDE_DATABASE_URL` and `ORBIT_JWT_SECRET`
+    - optional Cloud SQL instance attach
+    - runtime env controls for quotas/auth/CORS/OTEL
+- Added GCP deployment docs + env matrix:
+  - `docs/DEPLOY_GCP_CLOUD_RUN.md`
+  - `docs/GCP_ENV_MATRIX.md`
+  - linked from:
+    - `docs/deployment.md`
+    - `docs/index.md`
+    - `README.md`
+- Added initial Orbit Cloud dashboard/API-key management plan:
+  - `docs/ORBIT_CLOUD_DASHBOARD_PLAN.md`
+
+Validation:
+- `bash -n scripts/deploy_gcp_cloud_run.sh`: PASS
+
+### 2026-02-24 - Cloud Readiness Phase 2 (Dashboard Auth Mapping + Key Hardening)
+
+Completed:
+- Added dashboard/account auth mapping and audit storage primitives:
+  - `src/memory_engine/storage/db.py`
+    - new tables: `api_dashboard_users`, `api_audit_logs`
+    - `api_keys.last_used_source`
+  - `migrations/versions/20260224_0005_dashboard_auth_audit_and_key_rotation.py`
+- Added config knobs for stricter dashboard key endpoint rate limits + auto provisioning:
+  - `src/orbit_api/config.py`
+    - `dashboard_key_per_minute_limit` (`ORBIT_DASHBOARD_KEY_RATE_LIMIT_PER_MINUTE`)
+    - `dashboard_auto_provision_accounts` (`ORBIT_DASHBOARD_AUTO_PROVISION_ACCOUNTS`)
+- Hardened service layer:
+  - `src/orbit_api/service.py`
+    - JWT user -> account mapping with persisted identity binding
+    - audit trail events for key issue/revoke/rotate/authentication
+    - key rotation API (`rotate_api_key`)
+    - key listing pagination (`limit`/`cursor`, `has_more`)
+    - last-used source capture on API-key auth
+- Hardened API layer:
+  - `src/orbit_api/app.py`
+    - strict scope dependencies for read/write/feedback/keys access
+    - dashboard endpoints on stricter rate limit bucket
+    - new endpoint: `POST /v1/dashboard/keys/{key_id}/rotate`
+    - dashboard key list pagination query params
+    - JWT auth flow resolves mapped account context before request handling
+- Expanded API models:
+  - `src/orbit/models.py`
+    - `ApiKeyRotateRequest`, `ApiKeyRotateResponse`
+    - `ApiKeyListResponse.cursor/has_more`
+    - `ApiKeySummary.last_used_source`
+
+Tests added/updated:
+- `tests/unit/test_orbit_api_service.py`
+  - rotation behavior
+  - paginated key listing
+  - account mapping safety
+- `tests/integration/test_orbit_api_integration.py`
+  - dashboard key pagination + rotation + old/new key behavior
+  - claim-based shared account mapping across users
+- `tests/integration/test_orbit_api_errors.py`
+  - scope enforcement failures
+  - account-claim alignment in idempotency feedback path
+
+Validation:
+- `pytest`: PASS (`130 passed`)
+- `ruff check`: PASS
+- `pylint src/orbit_api/app.py src/orbit_api/service.py src/orbit_api/config.py src/orbit/models.py src/memory_engine/storage/db.py`: PASS threshold (`9.93/10`)
+
+### 2026-02-24 - Frontend Dashboard Integration (Vercel-Ready)
+
+Completed:
+- Added browser dashboard API client + auth token-source wiring:
+  - `front-end/lib/orbit-dashboard.ts`
+  - supports:
+    - `NEXT_PUBLIC_ORBIT_API_BASE_URL`
+    - `NEXT_PUBLIC_ORBIT_DASHBOARD_TOKEN_SOURCE` (`localStorage` or `env`)
+    - optional `NEXT_PUBLIC_ORBIT_DASHBOARD_BEARER_TOKEN`
+  - typed methods for:
+    - create key
+    - list keys (paginated)
+    - revoke key
+    - rotate key
+- Implemented full dashboard UI route:
+  - `front-end/app/dashboard/page.tsx`
+  - `front-end/components/orbit/dashboard-console.tsx`
+  - includes:
+    - token apply/clear flow
+    - key table with pagination
+    - create/revoke/rotate dialogs
+    - copy-once secret reveal flow after create/rotate
+    - inline success/error status feedback
+- Wired dashboard discoverability:
+  - `front-end/components/orbit/nav.tsx`
+  - `front-end/components/orbit/hero.tsx`
+  - `front-end/components/orbit/docs-sidebar.tsx`
+  - `front-end/app/docs/page.tsx`
+- Added frontend env templates + deployment notes:
+  - `front-end/.env.example`
+  - `front-end/README.md`
+  - updated docs:
+    - `front-end/app/docs/deployment/page.tsx`
+    - `front-end/app/docs/configuration/page.tsx`
+    - `front-end/app/docs/api-reference/page.tsx`
+    - `front-end/app/docs/rest-endpoints/page.tsx`
+    - `front-end/app/docs/installation/page.tsx`
+
+Validation:
+- `cd front-end && npm run build`: PASS
+- `cd front-end && npm run lint`: blocked (no ESLint flat config present in repo; command fails before linting code)
+
+### 2026-02-24 - Frontend Dashboard Hardening (Server-Side Auth Proxy)
+
+Completed:
+- Replaced browser-held dashboard bearer flow with server-only proxy auth:
+  - `front-end/lib/orbit-dashboard.ts`
+    - browser client now calls only `/api/dashboard/*`
+    - removed client token-source usage
+- Added server-side dashboard session auth primitives:
+  - `front-end/lib/dashboard-auth.ts`
+    - password mode / disabled mode
+    - signed HTTP-only session cookie
+    - strict session verification guard for proxy routes
+- Added dashboard auth endpoints:
+  - `GET /api/dashboard/auth/session`
+  - `POST /api/dashboard/auth/login`
+  - `POST /api/dashboard/auth/logout`
+  - files:
+    - `front-end/app/api/dashboard/auth/session/route.ts`
+    - `front-end/app/api/dashboard/auth/login/route.ts`
+    - `front-end/app/api/dashboard/auth/logout/route.ts`
+- Guarded all dashboard key proxy endpoints behind server-side session checks:
+  - `front-end/app/api/dashboard/keys/route.ts`
+  - `front-end/app/api/dashboard/keys/[keyId]/revoke/route.ts`
+  - `front-end/app/api/dashboard/keys/[keyId]/rotate/route.ts`
+- Updated dashboard UI for production-safe login/logout and expired-session handling:
+  - `front-end/components/orbit/dashboard-console.tsx`
+- Updated frontend env/docs for Vercel/server-only auth model:
+  - `front-end/.env.example`
+  - `front-end/README.md`
+  - `front-end/app/docs/configuration/page.tsx`
+  - `front-end/app/docs/deployment/page.tsx`
+  - `front-end/app/docs/troubleshooting/page.tsx`
+
+Validation:
+- `cd front-end && npm run build`: PASS
+- `cd front-end && npx tsc --noEmit`: PASS
+- `cd front-end && npm run lint`: blocked (no ESLint flat config present in repo)

@@ -55,6 +55,7 @@ class StorageDecision(BaseModel):
 
 
 class MemoryRecord(BaseModel):
+    account_key: str = "default"
     memory_id: str
     event_id: str
     content: str

@@ -155,23 +155,30 @@ class DecisionEngine:
         )
         self._last_lifecycle_scan_at: datetime | None = None
         self._total_memories = 0
-        self._entity_reference_counts: dict[str, int] = {}
-        self._entity_memory_ids: dict[str, set[str]] = {}
-        self._recent_key_timestamps: dict[tuple[str, str], list[datetime]] = {}
+        self._entity_reference_counts: dict[tuple[str, str], int] = {}
+        self._entity_memory_ids: dict[tuple[str, str], set[str]] = {}
+        self._recent_key_timestamps: dict[tuple[str, str, str], list[datetime]] = {}
         self._warm_cache_from_storage()
 
     def process_input(self, event: Event) -> ProcessedEvent:
         self._metrics["events_received"] += 1
         return self.input_processor.process(event)
 
-    def make_storage_decision(self, processed: ProcessedEvent) -> StorageDecision:
-        snapshot = self._memory_snapshot(processed)
+    def make_storage_decision(
+        self,
+        processed: ProcessedEvent,
+        account_key: str | None = None,
+    ) -> StorageDecision:
+        snapshot = self._memory_snapshot(processed, account_key=account_key)
         return self.decision_logic.decide(processed, snapshot)
 
     def store_memory(
-        self, processed: ProcessedEvent, decision: StorageDecision
+        self,
+        processed: ProcessedEvent,
+        decision: StorageDecision,
+        account_key: str | None = None,
     ) -> MemoryRecord | None:
-        self._run_personalization_lifecycle()
+        self._run_personalization_lifecycle(account_key=account_key)
         if not decision.store:
             self._metrics["events_discarded"] += 1
             return None
@@ -181,18 +188,31 @@ class DecisionEngine:
             decision=decision,
             compressed=False,
             original_count=1,
+            account_key=account_key,
         )
         self._register_stored_memory(stored)
         self._metrics["events_stored"] += 1
-        self._store_inferred_candidates(self.personalization.observe_memory(stored))
+        self._store_inferred_candidates(
+            self.personalization.observe_memory(stored, account_key=account_key),
+            account_key=account_key,
+        )
 
         if decision.should_compress:
-            self._maybe_compress_cluster(processed)
+            self._maybe_compress_cluster(processed, account_key=account_key)
         self._schedule_metrics_flush()
         return stored
 
-    def retrieve(self, query: str, top_k: int = 5) -> list[RetrievedMemory]:
-        return self.retrieval_service.retrieve(query, top_k=top_k)
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 5,
+        account_key: str | None = None,
+    ) -> list[RetrievedMemory]:
+        return self.retrieval_service.retrieve(
+            query,
+            top_k=top_k,
+            account_key=account_key,
+        )
 
     def record_outcome(self, memory_id: str, outcome: str) -> dict[str, float | None]:
         signal = 1.0 if outcome.lower() == "success" else -1.0
@@ -216,8 +236,9 @@ class DecisionEngine:
         ranked_memory_ids: list[str],
         helpful_memory_ids: list[str],
         outcome_signal: float = 1.0,
+        account_key: str | None = None,
     ) -> dict[str, float | None]:
-        self._run_personalization_lifecycle()
+        self._run_personalization_lifecycle(account_key=account_key)
         feedback = OutcomeFeedback(
             query=query,
             ranked_memory_ids=ranked_memory_ids,
@@ -227,21 +248,32 @@ class DecisionEngine:
         query_embedding = self.input_processor.encoder.encode_query(query).tolist()
         self._metrics["feedback_events"] += 1
         result = self.learning_loop.record_feedback(
-            feedback, query_embedding=query_embedding
+            feedback,
+            query_embedding=query_embedding,
+            account_key=account_key,
         )
-        ranked_memories = self.storage.fetch_by_ids(ranked_memory_ids)
+        ranked_memories = self.storage.fetch_by_ids(
+            ranked_memory_ids,
+            account_key=account_key,
+        )
         self._store_inferred_candidates(
             self.personalization.observe_feedback(
                 ranked_memories=ranked_memories,
                 helpful_memory_ids=set(helpful_memory_ids),
                 outcome_signal=outcome_signal,
-            )
+                account_key=account_key,
+            ),
+            account_key=account_key,
         )
         self._schedule_metrics_flush()
         return result
 
-    def get_memory(self, entity_id: str | None = None) -> list[MemoryRecord]:
-        records = self.storage.list_memories()
+    def get_memory(
+        self,
+        entity_id: str | None = None,
+        account_key: str | None = None,
+    ) -> list[MemoryRecord]:
+        records = self.storage.list_memories(account_key=account_key)
         if entity_id is not None:
             records = [record for record in records if entity_id in record.entities]
         output = []
@@ -250,11 +282,16 @@ class DecisionEngine:
             output.append(record.model_copy(update={"decay_half_life_days": half_life}))
         return output
 
-    def memory_count(self) -> int:
-        return self.storage.count_memories()
+    def memory_count(self, account_key: str | None = None) -> int:
+        return self.storage.count_memories(account_key=account_key)
 
-    def memory_ids_for_entity(self, entity_id: str) -> list[str]:
-        return sorted(self._entity_memory_ids.get(entity_id, set()))
+    def memory_ids_for_entity(
+        self,
+        entity_id: str,
+        account_key: str | None = None,
+    ) -> list[str]:
+        scope_key = self._entity_scope_key(account_key=account_key, entity_id=entity_id)
+        return sorted(self._entity_memory_ids.get(scope_key, set()))
 
     def close(self) -> None:
         self._write_metrics()
@@ -268,6 +305,7 @@ class DecisionEngine:
         decision: StorageDecision,
         compressed: bool,
         original_count: int,
+        account_key: str | None = None,
     ) -> MemoryRecord:
         encoded = self.input_processor.to_encoded_event(processed)
         tier = self._tier_from_string(decision.storage_tier)
@@ -282,23 +320,33 @@ class DecisionEngine:
                 "original_count": original_count,
             },
         )
-        stored = self.storage.store(encoded, core_decision)
+        normalized_account_key = self._normalize_account_key(account_key)
+        stored = self.storage.store(
+            encoded,
+            core_decision,
+            account_key=normalized_account_key,
+        )
         self.vector_store.add(stored.memory_id, stored.semantic_embedding)
         return stored
 
-    def _maybe_compress_cluster(self, processed: ProcessedEvent) -> None:
+    def _maybe_compress_cluster(
+        self,
+        processed: ProcessedEvent,
+        account_key: str | None = None,
+    ) -> None:
         since_iso = self.compression_planner.since_iso()
         candidates = self.storage.fetch_by_entity_and_intent(
             entity_id=processed.entity_id,
             intent=processed.event_type,
             since_iso=since_iso,
+            account_key=account_key,
         )
         candidates = [memory for memory in candidates if not memory.is_compressed]
         plan = self.compression_planner.plan(processed, candidates)
         if not plan.should_compress:
             return
 
-        self._delete_memories(plan.memory_ids_to_replace)
+        self._delete_memories(plan.memory_ids_to_replace, account_key=account_key)
         compressed_event = Event(
             timestamp=processed.timestamp,
             entity_id=processed.entity_id,
@@ -333,6 +381,7 @@ class DecisionEngine:
             decision=compressed_decision,
             compressed=True,
             original_count=plan.original_count,
+            account_key=account_key,
         )
         self._register_stored_memory(compressed_record)
         self._metrics["compression_events"] += 1
@@ -343,14 +392,21 @@ class DecisionEngine:
             original_count=plan.original_count,
         )
 
-    def _memory_snapshot(self, processed: ProcessedEvent) -> MemorySnapshot:
-        entity_reference_count = self._entity_reference_counts.get(
-            processed.entity_id, 0
+    def _memory_snapshot(
+        self,
+        processed: ProcessedEvent,
+        account_key: str | None = None,
+    ) -> MemorySnapshot:
+        scope_key = self._entity_scope_key(
+            account_key=account_key,
+            entity_id=processed.entity_id,
         )
+        entity_reference_count = self._entity_reference_counts.get(scope_key, 0)
         similar_recent_count = self._similar_recent_count(
             entity_id=processed.entity_id,
             intent=processed.event_type,
             reference_time=processed.timestamp,
+            account_key=account_key,
         )
         return MemorySnapshot(
             total_memories=self._total_memories,
@@ -363,15 +419,23 @@ class DecisionEngine:
     def _store_inferred_candidates(
         self,
         candidates: list[InferredMemoryCandidate],
+        account_key: str | None = None,
     ) -> None:
         if not candidates:
             return
         for candidate in candidates:
-            self._store_inferred_candidate(candidate)
+            self._store_inferred_candidate(candidate, account_key=account_key)
 
-    def _store_inferred_candidate(self, candidate: InferredMemoryCandidate) -> None:
+    def _store_inferred_candidate(
+        self,
+        candidate: InferredMemoryCandidate,
+        account_key: str | None = None,
+    ) -> None:
         if candidate.supersedes_memory_ids:
-            removed = self._delete_memories(list(candidate.supersedes_memory_ids))
+            removed = self._delete_memories(
+                list(candidate.supersedes_memory_ids),
+                account_key=account_key,
+            )
             if removed:
                 self._metrics["inferred_memories_superseded"] = (
                     self._metrics.get("inferred_memories_superseded", 0.0)
@@ -417,6 +481,7 @@ class DecisionEngine:
             decision=inferred_decision,
             compressed=False,
             original_count=1,
+            account_key=account_key,
         )
         self._register_stored_memory(stored)
         self._metrics["events_stored"] += 1
@@ -431,22 +496,26 @@ class DecisionEngine:
             memory_id=stored.memory_id,
         )
 
-    def _delete_memories(self, memory_ids: list[str]) -> list[MemoryRecord]:
+    def _delete_memories(
+        self,
+        memory_ids: list[str],
+        account_key: str | None = None,
+    ) -> list[MemoryRecord]:
         unique_ids = sorted({memory_id for memory_id in memory_ids if memory_id})
         if not unique_ids:
             return []
-        existing = self.storage.fetch_by_ids(unique_ids)
+        existing = self.storage.fetch_by_ids(unique_ids, account_key=account_key)
         if not existing:
             return []
         existing_ids = [memory.memory_id for memory in existing]
-        self.storage.delete_memories(existing_ids)
+        self.storage.delete_memories(existing_ids, account_key=account_key)
         self.vector_store.remove_many(existing_ids)
         for memory in existing:
             self._unregister_stored_memory(memory)
         self.personalization.notify_memories_deleted(existing)
         return existing
 
-    def _run_personalization_lifecycle(self) -> None:
+    def _run_personalization_lifecycle(self, account_key: str | None = None) -> None:
         now = datetime.now(UTC)
         if (
             self._lifecycle_scan_interval_seconds > 0
@@ -456,10 +525,12 @@ class DecisionEngine:
         ):
             return
         self._last_lifecycle_scan_at = now
-        expired_ids = self.personalization.expired_inferred_memory_ids()
+        expired_ids = self.personalization.expired_inferred_memory_ids(
+            account_key=account_key,
+        )
         if not expired_ids:
             return
-        removed = self._delete_memories(expired_ids)
+        removed = self._delete_memories(expired_ids, account_key=account_key)
         if not removed:
             return
         self._metrics["inferred_memories_expired"] = (
@@ -516,12 +587,15 @@ class DecisionEngine:
 
     def _register_stored_memory(self, memory: MemoryRecord) -> None:
         self._total_memories += 1
+        account_key = self._normalize_account_key(memory.account_key)
         for entity in set(memory.entities):
-            self._entity_reference_counts[entity] = (
-                self._entity_reference_counts.get(entity, 0) + 1
+            scope_key = self._entity_scope_key(account_key=account_key, entity_id=entity)
+            self._entity_reference_counts[scope_key] = (
+                self._entity_reference_counts.get(scope_key, 0) + 1
             )
-            self._entity_memory_ids.setdefault(entity, set()).add(memory.memory_id)
+            self._entity_memory_ids.setdefault(scope_key, set()).add(memory.memory_id)
         key = self._memory_key(
+            account_key=account_key,
             primary_entity=memory.entities[0] if memory.entities else "",
             intent=memory.intent,
         )
@@ -529,15 +603,18 @@ class DecisionEngine:
 
     def _unregister_stored_memory(self, memory: MemoryRecord) -> None:
         self._total_memories = max(0, self._total_memories - 1)
+        account_key = self._normalize_account_key(memory.account_key)
         for entity in set(memory.entities):
-            current = self._entity_reference_counts.get(entity, 0)
-            self._entity_reference_counts[entity] = max(0, current - 1)
-            ids = self._entity_memory_ids.get(entity)
+            scope_key = self._entity_scope_key(account_key=account_key, entity_id=entity)
+            current = self._entity_reference_counts.get(scope_key, 0)
+            self._entity_reference_counts[scope_key] = max(0, current - 1)
+            ids = self._entity_memory_ids.get(scope_key)
             if ids is not None:
                 ids.discard(memory.memory_id)
                 if not ids:
-                    self._entity_memory_ids.pop(entity, None)
+                    self._entity_memory_ids.pop(scope_key, None)
         key = self._memory_key(
+            account_key=account_key,
             primary_entity=memory.entities[0] if memory.entities else "",
             intent=memory.intent,
         )
@@ -546,13 +623,25 @@ class DecisionEngine:
             self._recent_key_timestamps[key] = timestamps[1:]
 
     @staticmethod
-    def _memory_key(primary_entity: str, intent: str) -> tuple[str, str]:
-        return (primary_entity, intent)
+    def _memory_key(
+        account_key: str,
+        primary_entity: str,
+        intent: str,
+    ) -> tuple[str, str, str]:
+        return (account_key, primary_entity, intent)
 
     def _similar_recent_count(
-        self, entity_id: str, intent: str, reference_time: datetime
+        self,
+        entity_id: str,
+        intent: str,
+        reference_time: datetime,
+        account_key: str | None = None,
     ) -> int:
-        key = self._memory_key(primary_entity=entity_id, intent=intent)
+        key = self._memory_key(
+            account_key=self._normalize_account_key(account_key),
+            primary_entity=entity_id,
+            intent=intent,
+        )
         timestamps = self._recent_key_timestamps.get(key, [])
         window_start = reference_time.timestamp() - (
             self.config.compression_window_days * 86400
@@ -560,6 +649,21 @@ class DecisionEngine:
         filtered = [ts for ts in timestamps if ts.timestamp() >= window_start]
         self._recent_key_timestamps[key] = filtered
         return len(filtered)
+
+    @staticmethod
+    def _normalize_account_key(account_key: str | None) -> str:
+        if account_key is None:
+            return "default"
+        normalized = account_key.strip()
+        return normalized or "default"
+
+    def _entity_scope_key(
+        self,
+        *,
+        account_key: str | None,
+        entity_id: str,
+    ) -> tuple[str, str]:
+        return (self._normalize_account_key(account_key), entity_id)
 
 
 def _unique_preserving_order(values: list[str]) -> list[str]:

@@ -69,7 +69,7 @@ export default function InstallationPage() {
 
       <h3 className="text-lg font-bold text-foreground mb-3">1) Create/get your Orbit API key</h3>
       <p className="text-muted-foreground text-sm leading-relaxed mb-6">
-        From Orbit dashboard, create a project API key (for example: <code className="text-primary">orbit_pk_...</code>).
+        From Orbit dashboard (<a href="/dashboard" className="text-primary hover:underline">/dashboard</a>), create a project API key (for example: <code className="text-primary">orbit_pk_...</code>).
       </p>
 
       <h3 className="text-lg font-bold text-foreground mb-3">2) Add project env</h3>

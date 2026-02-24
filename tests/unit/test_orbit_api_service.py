@@ -8,8 +8,11 @@ import pytest
 from decision_engine.models import MemoryRecord, RetrievedMemory, StorageTier
 from memory_engine.config import EngineConfig
 from orbit.models import FeedbackRequest, IngestRequest, RetrieveRequest
+from orbit_api.auth import AuthContext
 from orbit_api.config import ApiConfig
 from orbit_api.service import (
+    AccountMappingError,
+    ApiKeyAuthenticationError,
     IdempotencyConflictError,
     OrbitApiService,
     RateLimitExceededError,
@@ -124,6 +127,56 @@ def test_service_feedback_missing_memory(tmp_path: Path) -> None:
     try:
         with pytest.raises(KeyError):
             service.feedback(FeedbackRequest(memory_id="missing", helpful=False))
+    finally:
+        service.close()
+
+
+def test_service_isolates_memories_by_account_key(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        ingest_a = service.ingest(
+            IngestRequest(
+                content="Tenant A private profile memory",
+                event_type="user_profile",
+                entity_id="shared",
+            ),
+            account_key="acct_a",
+        )
+        ingest_b = service.ingest(
+            IngestRequest(
+                content="Tenant B private profile memory",
+                event_type="user_profile",
+                entity_id="shared",
+            ),
+            account_key="acct_b",
+        )
+
+        retrieve_a = service.retrieve(
+            RetrieveRequest(
+                query="What do I know about shared?",
+                entity_id="shared",
+                limit=10,
+            ),
+            account_key="acct_a",
+        )
+        ids_a = {item.memory_id for item in retrieve_a.memories}
+        assert ingest_a.memory_id in ids_a
+        assert ingest_b.memory_id not in ids_a
+
+        listed_b = service.list_memories(limit=10, cursor=None, account_key="acct_b")
+        ids_b = {item.memory_id for item in listed_b.data}
+        assert ingest_b.memory_id in ids_b
+        assert ingest_a.memory_id not in ids_b
+
+        with pytest.raises(KeyError):
+            service.feedback(
+                FeedbackRequest(
+                    memory_id=ingest_a.memory_id,
+                    helpful=True,
+                    outcome_value=1.0,
+                ),
+                account_key="acct_b",
+            )
     finally:
         service.close()
 
@@ -252,6 +305,147 @@ def test_service_idempotent_ingest_batch_replay(tmp_path: Path) -> None:
         assert replayed is True
         assert len(replay) == 2
         assert replay_snapshot.remaining == 0
+    finally:
+        service.close()
+
+
+def test_service_issue_list_and_authenticate_api_key(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        issued = service.issue_api_key(
+            account_key="acct_dash",
+            name="prod-key",
+            scopes=["read", "write", "read"],
+        )
+        assert issued.key.startswith("orbit_pk_")
+        assert issued.key_prefix.startswith("orbit_pk_")
+        assert issued.scopes == ["read", "write"]
+
+        listed_before = service.list_api_keys(account_key="acct_dash")
+        assert len(listed_before.data) == 1
+        assert listed_before.data[0].last_used_at is None
+
+        auth_context = service.authenticate_api_key(issued.key)
+        assert auth_context.subject == "acct_dash"
+        assert auth_context.claims["auth_type"] == "api_key"
+        assert auth_context.claims["key_id"] == issued.key_id
+        assert "read" in auth_context.scopes
+
+        listed_after = service.list_api_keys(account_key="acct_dash")
+        assert listed_after.data[0].last_used_at is not None
+    finally:
+        service.close()
+
+
+def test_service_revoked_api_key_cannot_authenticate(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        issued = service.issue_api_key(
+            account_key="acct_revoke",
+            name="revoke-me",
+            scopes=["write"],
+        )
+        revoked = service.revoke_api_key(
+            account_key="acct_revoke",
+            key_id=issued.key_id,
+        )
+        assert revoked.revoked is True
+        assert revoked.revoked_at is not None
+
+        with pytest.raises(ApiKeyAuthenticationError):
+            service.authenticate_api_key(issued.key)
+    finally:
+        service.close()
+
+
+def test_service_api_key_revoke_is_account_scoped(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        issued = service.issue_api_key(
+            account_key="acct_a",
+            name="tenant-a-key",
+            scopes=[],
+        )
+        with pytest.raises(KeyError):
+            service.revoke_api_key(account_key="acct_b", key_id=issued.key_id)
+    finally:
+        service.close()
+
+
+def test_service_rotate_api_key_replaces_old_key(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        issued = service.issue_api_key(
+            account_key="acct_rotate",
+            name="rotate-me",
+            scopes=["read", "write", "feedback"],
+        )
+        rotated = service.rotate_api_key(
+            account_key="acct_rotate",
+            key_id=issued.key_id,
+            name="rotate-me-v2",
+            scopes=["read", "write", "feedback"],
+        )
+        assert rotated.revoked_key_id == issued.key_id
+        assert rotated.new_key.name == "rotate-me-v2"
+        assert rotated.new_key.key.startswith("orbit_pk_")
+
+        with pytest.raises(ApiKeyAuthenticationError):
+            service.authenticate_api_key(issued.key)
+        authenticated_new = service.authenticate_api_key(rotated.new_key.key)
+        assert authenticated_new.subject == "acct_rotate"
+    finally:
+        service.close()
+
+
+def test_service_list_api_keys_paginates(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        for idx in range(3):
+            service.issue_api_key(
+                account_key="acct_page",
+                name=f"page-{idx}",
+                scopes=["read", "write"],
+            )
+
+        first = service.list_api_keys(account_key="acct_page", limit=2, cursor=None)
+        assert len(first.data) == 2
+        assert first.has_more is True
+        assert first.cursor is not None
+
+        second = service.list_api_keys(
+            account_key="acct_page",
+            limit=2,
+            cursor=first.cursor,
+        )
+        assert len(second.data) == 1
+        assert second.has_more is False
+        assert second.cursor is None
+    finally:
+        service.close()
+
+
+def test_service_resolve_account_context_with_claim_mapping(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        auth = AuthContext(
+            subject="oidc-user-1",
+            scopes=["read", "write"],
+            token="jwt-token",
+            claims={"iss": "issuer-a", "account_key": "acct_shared"},
+        )
+        resolved = service.resolve_account_context(auth)
+        assert resolved.subject == "acct_shared"
+        assert resolved.claims["auth_subject"] == "oidc-user-1"
+
+        same_identity_different_account = AuthContext(
+            subject="oidc-user-1",
+            scopes=["read"],
+            token="jwt-token",
+            claims={"iss": "issuer-a", "account_key": "acct_other"},
+        )
+        with pytest.raises(AccountMappingError):
+            service.resolve_account_context(same_identity_different_account)
     finally:
         service.close()
 

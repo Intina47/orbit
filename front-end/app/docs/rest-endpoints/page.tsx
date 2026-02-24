@@ -11,7 +11,7 @@ export default function RestEndpointsPage() {
         REST Endpoints
       </h1>
       <p className="text-muted-foreground text-base leading-relaxed max-w-xl mb-12">
-        Curl-first examples for Orbit endpoints. Protected routes require Bearer JWT.
+        Curl-first examples for Orbit endpoints. Protected routes require Bearer JWT or Orbit API key.
       </p>
 
       {/* Ingest */}
@@ -84,6 +84,43 @@ export default function RestEndpointsPage() {
   -H "Authorization: Bearer <jwt-token>"`}
         language="bash"
         filename="status.sh"
+      />
+
+      {/* Dashboard keys */}
+      <h2 className="text-2xl font-bold text-foreground mb-4 mt-12">POST /v1/dashboard/keys</h2>
+      <CodeBlock
+        code={`curl -X POST http://localhost:8000/v1/dashboard/keys \\
+  -H "Authorization: Bearer <jwt-token>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name":"frontend-prod","scopes":["read","write","feedback"]}'`}
+        language="bash"
+        filename="dashboard-issue.sh"
+      />
+
+      <h2 className="text-2xl font-bold text-foreground mb-4 mt-12">GET /v1/dashboard/keys</h2>
+      <CodeBlock
+        code={`curl "http://localhost:8000/v1/dashboard/keys?limit=10" \\
+  -H "Authorization: Bearer <jwt-token>"`}
+        language="bash"
+        filename="dashboard-list.sh"
+      />
+
+      <h2 className="text-2xl font-bold text-foreground mb-4 mt-12">POST /v1/dashboard/keys/{'{key_id}'}/rotate</h2>
+      <CodeBlock
+        code={`curl -X POST http://localhost:8000/v1/dashboard/keys/<key-id>/rotate \\
+  -H "Authorization: Bearer <jwt-token>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name":"frontend-prod-rotated","scopes":["read","write","feedback"]}'`}
+        language="bash"
+        filename="dashboard-rotate.sh"
+      />
+
+      <h2 className="text-2xl font-bold text-foreground mb-4 mt-12">POST /v1/dashboard/keys/{'{key_id}'}/revoke</h2>
+      <CodeBlock
+        code={`curl -X POST http://localhost:8000/v1/dashboard/keys/<key-id>/revoke \\
+  -H "Authorization: Bearer <jwt-token>"`}
+        language="bash"
+        filename="dashboard-revoke.sh"
       />
 
       {/* Metrics */}

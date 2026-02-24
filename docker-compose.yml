@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: orbit
       POSTGRES_PASSWORD: orbit
     ports:
-      - "5432:5432"
+      - "${ORBIT_POSTGRES_PORT:-5432}:5432"
     volumes:
       - orbit-postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -63,4 +63,3 @@ services:
 
 volumes:
   orbit-postgres-data:
-

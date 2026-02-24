@@ -30,11 +30,19 @@ export default function ConfigurationPage() {
       title: "Rate Limits",
       vars: [
         { var: "ORBIT_RATE_LIMIT_PER_MINUTE", desc: "Requests per minute" },
+        { var: "ORBIT_DASHBOARD_KEY_RATE_LIMIT_PER_MINUTE", desc: "Dashboard key-management requests per minute" },
         { var: "ORBIT_RATE_LIMIT_EVENTS_PER_DAY", desc: "Daily event quota" },
         { var: "ORBIT_RATE_LIMIT_QUERIES_PER_DAY", desc: "Daily query quota" },
         { var: "ORBIT_MAX_INGEST_CONTENT_CHARS", desc: "Max ingest content length" },
         { var: "ORBIT_MAX_QUERY_CHARS", desc: "Max query length" },
         { var: "ORBIT_MAX_BATCH_ITEMS", desc: "Max items in batch request" },
+      ],
+    },
+    {
+      title: "Dashboard/Auth Mapping",
+      vars: [
+        { var: "ORBIT_DASHBOARD_AUTO_PROVISION_ACCOUNTS", desc: "Auto-create account mapping for new JWT identities" },
+        { var: "ORBIT_CORS_ALLOW_ORIGINS", desc: "Comma-separated browser origins allowed to call API directly" },
       ],
     },
     {
@@ -53,6 +61,18 @@ export default function ConfigurationPage() {
       vars: [
         { var: "ORBIT_OTEL_SERVICE_NAME", desc: "OpenTelemetry service name" },
         { var: "ORBIT_OTEL_EXPORTER_ENDPOINT", desc: "OTLP exporter endpoint" },
+      ],
+    },
+    {
+      title: "Frontend (Vercel/Next.js)",
+      vars: [
+        { var: "NEXT_PUBLIC_ORBIT_API_BASE_URL", desc: "Public API base URL for docs/UI display" },
+        { var: "ORBIT_DASHBOARD_PROXY_BASE_URL", desc: "Optional server-side proxy target override" },
+        { var: "ORBIT_DASHBOARD_SERVER_BEARER_TOKEN", desc: "Server-side token used by dashboard proxy" },
+        { var: "ORBIT_DASHBOARD_AUTH_MODE", desc: "password | disabled" },
+        { var: "ORBIT_DASHBOARD_AUTH_PASSWORD", desc: "Dashboard login password (server only)" },
+        { var: "ORBIT_DASHBOARD_SESSION_SECRET", desc: "HMAC secret for HTTP-only dashboard session cookie" },
+        { var: "ORBIT_DASHBOARD_SESSION_TTL_SECONDS", desc: "Optional session TTL (default 43200)" },
       ],
     },
   ]

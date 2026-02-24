@@ -13,6 +13,13 @@
 docker compose up --build
 ```
 
+## Google Cloud Deployment
+
+- Cloud Build pipeline config: `cloudbuild.yaml`
+- Manual/CI deploy script: `scripts/deploy_gcp_cloud_run.sh`
+- Runbook: `docs/DEPLOY_GCP_CLOUD_RUN.md`
+- Environment matrix: `docs/GCP_ENV_MATRIX.md`
+
 ## Migration Path
 
 Alembic migrations are under `migrations/`.
@@ -41,4 +48,3 @@ ORBIT_AUTO_MIGRATE=true
 - Metrics endpoint: `GET /v1/metrics`
 - Prometheus UI: `http://localhost:9090`
 - OTel exporter endpoint: `ORBIT_OTEL_EXPORTER_ENDPOINT`
-

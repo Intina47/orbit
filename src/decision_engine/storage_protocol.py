@@ -12,17 +12,28 @@ class StorageManagerProtocol(Protocol):
     """Shared storage interface for SQLite and SQLAlchemy backends."""
 
     def store(
-        self, encoded_event: EncodedEvent, decision: StorageDecision
+        self,
+        encoded_event: EncodedEvent,
+        decision: StorageDecision,
+        account_key: str = "default",
     ) -> MemoryRecord:
         """Persist an encoded event and return the stored memory record."""
 
-    def count_memories(self) -> int:
+    def count_memories(self, account_key: str | None = None) -> int:
         """Return total persisted memories."""
 
-    def list_memories(self, limit: int | None = None) -> list[MemoryRecord]:
+    def list_memories(
+        self,
+        limit: int | None = None,
+        account_key: str | None = None,
+    ) -> list[MemoryRecord]:
         """Return all memories, optionally capped by limit."""
 
-    def fetch_by_ids(self, memory_ids: list[str]) -> list[MemoryRecord]:
+    def fetch_by_ids(
+        self,
+        memory_ids: list[str],
+        account_key: str | None = None,
+    ) -> list[MemoryRecord]:
         """Return memories matching a set of IDs."""
 
     def fetch_by_entity_and_intent(
@@ -30,6 +41,7 @@ class StorageManagerProtocol(Protocol):
         entity_id: str,
         intent: str,
         since_iso: str | None = None,
+        account_key: str | None = None,
     ) -> list[MemoryRecord]:
         """Return memories matching entity + intent with optional time filter."""
 
@@ -37,16 +49,26 @@ class StorageManagerProtocol(Protocol):
         self,
         query_embedding: NDArray[np.float32],
         top_k: int,
+        account_key: str | None = None,
     ) -> list[MemoryRecord]:
         """Return top-k semantic candidates."""
 
-    def update_retrieval(self, memory_id: str) -> None:
+    def update_retrieval(self, memory_id: str, account_key: str | None = None) -> None:
         """Increment retrieval counters for a memory."""
 
-    def update_outcome(self, memory_id: str, outcome_signal: float) -> None:
+    def update_outcome(
+        self,
+        memory_id: str,
+        outcome_signal: float,
+        account_key: str | None = None,
+    ) -> None:
         """Update aggregated outcome signal for a memory."""
 
-    def delete_memories(self, memory_ids: list[str]) -> None:
+    def delete_memories(
+        self,
+        memory_ids: list[str],
+        account_key: str | None = None,
+    ) -> None:
         """Delete memories by ID."""
 
     def close(self) -> None:

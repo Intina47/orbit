@@ -27,6 +27,12 @@ from starlette.types import ExceptionHandler
 from memory_engine.config import EngineConfig
 from orbit.logger import configure_logging, get_logger
 from orbit.models import (
+    ApiKeyCreateRequest,
+    ApiKeyIssueResponse,
+    ApiKeyListResponse,
+    ApiKeyRevokeResponse,
+    ApiKeyRotateRequest,
+    ApiKeyRotateResponse,
     AuthValidationResponse,
     FeedbackBatchRequest,
     FeedbackBatchResponse,
@@ -45,6 +51,8 @@ from orbit.models import (
 from orbit_api.auth import AuthContext, require_auth_context
 from orbit_api.config import ApiConfig
 from orbit_api.service import (
+    AccountMappingError,
+    ApiKeyAuthenticationError,
     IdempotencyConflictError,
     OrbitApiService,
     RateLimitExceededError,
@@ -124,9 +132,70 @@ def create_app(
         credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_security)],
         service: Annotated[OrbitApiService, Depends(get_service)],
     ) -> AuthContext:
+        if credentials is not None:
+            bearer_token = credentials.credentials.strip()
+            if bearer_token.startswith("orbit_pk_"):
+                try:
+                    context = service.authenticate_api_key(
+                        bearer_token,
+                        source=f"{request.method} {request.url.path}",
+                    )
+                except ApiKeyAuthenticationError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid API key.",
+                    ) from exc
+                request.state.auth_context = context
+                return context
         context = require_auth_context(credentials=credentials, config=service.config)
+        try:
+            context = service.resolve_account_context(context)
+        except AccountMappingError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(exc),
+            ) from exc
         request.state.auth_context = context
         return context
+
+    def _require_any_scope(auth: AuthContext, allowed_scopes: tuple[str, ...]) -> AuthContext:
+        if "admin" in auth.scopes or "*" in auth.scopes:
+            return auth
+        if any(scope in auth.scopes for scope in allowed_scopes):
+            return auth
+        joined = ", ".join(allowed_scopes)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Missing required scope. Need one of: {joined}",
+        )
+
+    def require_read_scope(
+        auth: Annotated[AuthContext, Depends(get_auth_context)],
+    ) -> AuthContext:
+        return _require_any_scope(auth, ("read", "memory:read"))
+
+    def require_write_scope(
+        auth: Annotated[AuthContext, Depends(get_auth_context)],
+    ) -> AuthContext:
+        return _require_any_scope(auth, ("write", "memory:write"))
+
+    def require_feedback_scope(
+        auth: Annotated[AuthContext, Depends(get_auth_context)],
+    ) -> AuthContext:
+        return _require_any_scope(
+            auth,
+            ("feedback", "memory:feedback", "write", "memory:write"),
+        )
+
+    def require_keys_read_scope(
+        auth: Annotated[AuthContext, Depends(get_auth_context)],
+    ) -> AuthContext:
+        return _require_any_scope(auth, ("keys:read", "read"))
+
+    def require_keys_write_scope(
+        auth: Annotated[AuthContext, Depends(get_auth_context)],
+    ) -> AuthContext:
+        return _require_any_scope(auth, ("keys:write", "write"))
 
     @app.post(
         "/v1/ingest",
@@ -139,7 +208,7 @@ def create_app(
         request: Request,
         response: Response,
         service: Annotated[OrbitApiService, Depends(get_service)],
-        auth: Annotated[AuthContext, Depends(get_auth_context)],
+        auth: Annotated[AuthContext, Depends(require_write_scope)],
         idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     ) -> IngestResponse:
         if len(payload.content) > config.max_ingest_content_chars:
@@ -185,7 +254,7 @@ def create_app(
         request: Request,
         response: Response,
         service: Annotated[OrbitApiService, Depends(get_service)],
-        auth: Annotated[AuthContext, Depends(get_auth_context)],
+        auth: Annotated[AuthContext, Depends(require_read_scope)],
         query: Annotated[str, Query(min_length=1, max_length=config.max_query_chars)],
         limit_count: Annotated[int, Query(alias="limit", ge=1, le=100)] = 10,
         entity_id: str | None = None,
@@ -205,7 +274,7 @@ def create_app(
             event_type=event_type,
             time_range=_build_time_range(start_time, end_time),
         )
-        result = service.retrieve(retrieve_request)
+        result = service.retrieve(retrieve_request, account_key=auth.subject)
         _apply_rate_headers(response, snapshot)
         log.info(
             "retrieve",
@@ -222,7 +291,7 @@ def create_app(
         request: Request,
         response: Response,
         service: Annotated[OrbitApiService, Depends(get_service)],
-        auth: Annotated[AuthContext, Depends(get_auth_context)],
+        auth: Annotated[AuthContext, Depends(require_feedback_scope)],
         idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     ) -> FeedbackResponse:
         try:
@@ -265,7 +334,7 @@ def create_app(
         request: Request,
         response: Response,
         service: Annotated[OrbitApiService, Depends(get_service)],
-        auth: Annotated[AuthContext, Depends(get_auth_context)],
+        auth: Annotated[AuthContext, Depends(require_write_scope)],
         idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     ) -> IngestBatchResponse:
         if not payload.events:
@@ -324,7 +393,7 @@ def create_app(
         request: Request,
         response: Response,
         service: Annotated[OrbitApiService, Depends(get_service)],
-        auth: Annotated[AuthContext, Depends(get_auth_context)],
+        auth: Annotated[AuthContext, Depends(require_feedback_scope)],
         idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     ) -> FeedbackBatchResponse:
         if not payload.feedback:
@@ -376,7 +445,7 @@ def create_app(
     @app.get("/v1/status", response_model=StatusResponse)
     def status_endpoint(
         service: Annotated[OrbitApiService, Depends(get_service)],
-        auth: Annotated[AuthContext, Depends(get_auth_context)],
+        auth: Annotated[AuthContext, Depends(require_read_scope)],
     ) -> StatusResponse:
         return service.status(auth.subject)
 
@@ -399,13 +468,153 @@ def create_app(
     ) -> AuthValidationResponse:
         return service.validate_token(auth)
 
+    @app.post(
+        "/v1/dashboard/keys",
+        response_model=ApiKeyIssueResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    @limit(config.dashboard_key_per_minute_limit)
+    def issue_api_key_endpoint(
+        payload: ApiKeyCreateRequest,
+        request: Request,
+        response: Response,
+        service: Annotated[OrbitApiService, Depends(get_service)],
+        auth: Annotated[AuthContext, Depends(require_keys_write_scope)],
+    ) -> ApiKeyIssueResponse:
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            result = service.issue_api_key(
+                account_key=auth.subject,
+                name=payload.name,
+                scopes=payload.scopes,
+                actor_subject=_actor_subject(auth),
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        log.info(
+            "issue_api_key",
+            account=auth.subject,
+            key_id=result.key_id,
+            path=str(request.url.path),
+        )
+        return result
+
+    @app.get("/v1/dashboard/keys", response_model=ApiKeyListResponse)
+    @limit(config.dashboard_key_per_minute_limit)
+    def list_api_keys_endpoint(
+        request: Request,
+        response: Response,
+        service: Annotated[OrbitApiService, Depends(get_service)],
+        auth: Annotated[AuthContext, Depends(require_keys_read_scope)],
+        limit_count: Annotated[int, Query(alias="limit", ge=1, le=100)] = 50,
+        cursor: str | None = None,
+    ) -> ApiKeyListResponse:
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            result = service.list_api_keys(
+                account_key=auth.subject,
+                limit=limit_count,
+                cursor=cursor,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        log.info(
+            "list_api_keys",
+            account=auth.subject,
+            count=len(result.data),
+            path=str(request.url.path),
+        )
+        return result
+
+    @app.post("/v1/dashboard/keys/{key_id}/revoke", response_model=ApiKeyRevokeResponse)
+    @limit(config.dashboard_key_per_minute_limit)
+    def revoke_api_key_endpoint(
+        key_id: str,
+        request: Request,
+        response: Response,
+        service: Annotated[OrbitApiService, Depends(get_service)],
+        auth: Annotated[AuthContext, Depends(require_keys_write_scope)],
+    ) -> ApiKeyRevokeResponse:
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            result = service.revoke_api_key(
+                account_key=auth.subject,
+                key_id=key_id,
+                actor_subject=_actor_subject(auth),
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        log.info(
+            "revoke_api_key",
+            account=auth.subject,
+            key_id=result.key_id,
+            path=str(request.url.path),
+        )
+        return result
+
+    @app.post(
+        "/v1/dashboard/keys/{key_id}/rotate",
+        response_model=ApiKeyRotateResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    @limit(config.dashboard_key_per_minute_limit)
+    def rotate_api_key_endpoint(
+        key_id: str,
+        payload: ApiKeyRotateRequest,
+        request: Request,
+        response: Response,
+        service: Annotated[OrbitApiService, Depends(get_service)],
+        auth: Annotated[AuthContext, Depends(require_keys_write_scope)],
+    ) -> ApiKeyRotateResponse:
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            result = service.rotate_api_key(
+                account_key=auth.subject,
+                key_id=key_id,
+                name=payload.name,
+                scopes=payload.scopes,
+                actor_subject=_actor_subject(auth),
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=str(exc),
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        log.info(
+            "rotate_api_key",
+            account=auth.subject,
+            revoked_key_id=result.revoked_key_id,
+            new_key_id=result.new_key.key_id,
+            path=str(request.url.path),
+        )
+        return result
+
     @app.get("/v1/memories", response_model=PaginatedMemoriesResponse)
     @limit(config.per_minute_limit)
     def list_memories_endpoint(
         request: Request,
         response: Response,
         service: Annotated[OrbitApiService, Depends(get_service)],
-        auth: Annotated[AuthContext, Depends(get_auth_context)],
+        auth: Annotated[AuthContext, Depends(require_read_scope)],
         limit_count: Annotated[int, Query(alias="limit", ge=1, le=100)] = 100,
         cursor: str | None = None,
     ) -> PaginatedMemoriesResponse:
@@ -414,7 +623,11 @@ def create_app(
             account_key=auth.subject,
             amount=1,
         )
-        result = service.list_memories(limit=limit_count, cursor=cursor)
+        result = service.list_memories(
+            limit=limit_count,
+            cursor=cursor,
+            account_key=auth.subject,
+        )
         _apply_rate_headers(response, snapshot)
         log.info(
             "list_memories",
@@ -425,6 +638,12 @@ def create_app(
         return result
 
     return app
+
+
+def _actor_subject(auth: AuthContext) -> str:
+    raw = auth.claims.get("auth_subject")
+    normalized = str(raw).strip() if raw is not None else ""
+    return normalized or auth.subject
 
 
 def _service_from_app(app: FastAPI) -> OrbitApiService:

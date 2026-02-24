@@ -20,11 +20,13 @@ class ApiConfig(BaseModel):
     free_events_per_day: int = 100
     free_queries_per_day: int = 500
     per_minute_limit: str = "1000/minute"
+    dashboard_key_per_minute_limit: str = "60/minute"
     max_ingest_content_chars: int = 20_000
     max_query_chars: int = 2_000
     max_batch_items: int = 100
     uptime_percent: float = 99.9
     environment: str = "development"
+    dashboard_auto_provision_accounts: bool = True
 
     jwt_secret: str = "orbit-dev-secret-change-me"
     jwt_algorithm: str = "HS256"
@@ -66,12 +68,12 @@ class ApiConfig(BaseModel):
             raise ValueError(msg)
         return normalized
 
-    @field_validator("per_minute_limit")
+    @field_validator("per_minute_limit", "dashboard_key_per_minute_limit")
     @classmethod
-    def validate_per_minute_limit(cls, value: str) -> str:
+    def validate_rate_limit(cls, value: str) -> str:
         stripped = value.strip()
         if not stripped:
-            msg = "per_minute_limit cannot be empty"
+            msg = "rate limit values cannot be empty"
             raise ValueError(msg)
         return stripped
 
@@ -142,6 +144,10 @@ class ApiConfig(BaseModel):
             free_events_per_day=_env_int("ORBIT_RATE_LIMIT_EVENTS_PER_DAY", 100),
             free_queries_per_day=_env_int("ORBIT_RATE_LIMIT_QUERIES_PER_DAY", 500),
             per_minute_limit=os.getenv("ORBIT_RATE_LIMIT_PER_MINUTE", "1000/minute"),
+            dashboard_key_per_minute_limit=os.getenv(
+                "ORBIT_DASHBOARD_KEY_RATE_LIMIT_PER_MINUTE",
+                "60/minute",
+            ),
             max_ingest_content_chars=_env_int(
                 "ORBIT_MAX_INGEST_CONTENT_CHARS", 20_000
             ),
@@ -149,6 +155,10 @@ class ApiConfig(BaseModel):
             max_batch_items=_env_int("ORBIT_MAX_BATCH_ITEMS", 100),
             uptime_percent=_env_float("ORBIT_UPTIME_PERCENT", 99.9),
             environment=os.getenv("ORBIT_ENV", "development"),
+            dashboard_auto_provision_accounts=_env_bool(
+                "ORBIT_DASHBOARD_AUTO_PROVISION_ACCOUNTS",
+                True,
+            ),
             jwt_secret=os.getenv("ORBIT_JWT_SECRET", "orbit-dev-secret-change-me"),
             jwt_algorithm=os.getenv("ORBIT_JWT_ALGORITHM", "HS256"),
             jwt_issuer=os.getenv("ORBIT_JWT_ISSUER", "orbit"),
@@ -193,3 +203,15 @@ def _env_float(name: str, default: float) -> float:
         return float(raw)
     except ValueError:
         return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default

@@ -19,6 +19,12 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "memories",
+        sa.Column(
+            "account_key",
+            sa.String(length=128),
+            nullable=False,
+            server_default="default",
+        ),
         sa.Column("memory_id", sa.String(length=64), nullable=False),
         sa.Column("event_id", sa.String(length=64), nullable=False),
         sa.Column("content", sa.Text(), nullable=False),
@@ -50,9 +56,11 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("memory_id"),
     )
+    op.create_index("ix_memories_account_key", "memories", ["account_key"], unique=False)
     op.create_index("ix_memories_semantic_key", "memories", ["semantic_key"], unique=False)
 
 
 def downgrade() -> None:
+    op.drop_index("ix_memories_account_key", table_name="memories")
     op.drop_index("ix_memories_semantic_key", table_name="memories")
     op.drop_table("memories")

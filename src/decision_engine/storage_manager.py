@@ -59,6 +59,7 @@ class SQLiteStorageManager:
         with self._lock:
             self._connection.execute("""
                 CREATE TABLE IF NOT EXISTS memories (
+                    account_key TEXT NOT NULL DEFAULT 'default',
                     memory_id TEXT PRIMARY KEY,
                     event_id TEXT NOT NULL,
                     content TEXT NOT NULL,
@@ -82,6 +83,11 @@ class SQLiteStorageManager:
                 """)
             self._ensure_column("is_compressed", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column("original_count", "INTEGER NOT NULL DEFAULT 1")
+            self._ensure_column("account_key", "TEXT NOT NULL DEFAULT 'default'")
+            self._connection.execute(
+                "UPDATE memories SET account_key = 'default' "
+                "WHERE account_key IS NULL OR account_key = ''"
+            )
             self._connection.commit()
 
     def _ensure_column(self, column_name: str, column_definition: str) -> None:
@@ -95,8 +101,12 @@ class SQLiteStorageManager:
             )
 
     def store(
-        self, encoded_event: EncodedEvent, decision: StorageDecision
+        self,
+        encoded_event: EncodedEvent,
+        decision: StorageDecision,
+        account_key: str = "default",
     ) -> MemoryRecord:
+        normalized_account_key = self._normalize_account_key(account_key)
         memory_id = str(uuid4())
         now = datetime.now(UTC)
         intent = encoded_event.understanding.intent
@@ -105,6 +115,7 @@ class SQLiteStorageManager:
             encoded_event.raw_embedding if self._store_raw_embedding else []
         )
         record = MemoryRecord(
+            account_key=normalized_account_key,
             memory_id=memory_id,
             event_id=encoded_event.event.event_id,
             content=content,
@@ -128,14 +139,15 @@ class SQLiteStorageManager:
             self._connection.execute(
                 """
                 INSERT INTO memories (
-                    memory_id, event_id, content, summary, intent, entities_json,
+                    account_key, memory_id, event_id, content, summary, intent, entities_json,
                     relationships_json, raw_embedding_json, semantic_embedding_json,
                     semantic_key, created_at, updated_at, retrieval_count,
                     avg_outcome_signal, outcome_count, storage_tier, latest_importance,
                     is_compressed, original_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    record.account_key,
                     record.memory_id,
                     record.event_id,
                     record.content,
@@ -160,34 +172,69 @@ class SQLiteStorageManager:
             self._connection.commit()
         return record
 
-    def count_memories(self) -> int:
+    def count_memories(self, account_key: str | None = None) -> int:
         with self._lock:
-            cursor = self._connection.execute("SELECT COUNT(*) FROM memories")
+            if account_key is None:
+                cursor = self._connection.execute("SELECT COUNT(*) FROM memories")
+            else:
+                normalized_account_key = self._normalize_account_key(account_key)
+                cursor = self._connection.execute(
+                    "SELECT COUNT(*) FROM memories WHERE account_key = ?",
+                    (normalized_account_key,),
+                )
             row = cursor.fetchone()
             if row is None:
                 return 0
             return int(row[0])
 
-    def list_memories(self, limit: int | None = None) -> list[MemoryRecord]:
+    def list_memories(
+        self,
+        limit: int | None = None,
+        account_key: str | None = None,
+    ) -> list[MemoryRecord]:
         with self._lock:
-            if limit is None:
+            if account_key is None and limit is None:
                 cursor = self._connection.execute("SELECT * FROM memories")
-            else:
+            elif account_key is None:
                 cursor = self._connection.execute(
                     "SELECT * FROM memories LIMIT ?", (limit,)
+                )
+            elif limit is None:
+                normalized_account_key = self._normalize_account_key(account_key)
+                cursor = self._connection.execute(
+                    "SELECT * FROM memories WHERE account_key = ?",
+                    (normalized_account_key,),
+                )
+            else:
+                normalized_account_key = self._normalize_account_key(account_key)
+                cursor = self._connection.execute(
+                    "SELECT * FROM memories WHERE account_key = ? LIMIT ?",
+                    (normalized_account_key, limit),
                 )
             rows = cursor.fetchall()
         return [self._row_to_memory(row) for row in rows]
 
-    def fetch_by_ids(self, memory_ids: list[str]) -> list[MemoryRecord]:
+    def fetch_by_ids(
+        self,
+        memory_ids: list[str],
+        account_key: str | None = None,
+    ) -> list[MemoryRecord]:
         if not memory_ids:
             return []
         with self._lock:
             placeholders = ", ".join("?" for _ in memory_ids)
-            cursor = self._connection.execute(
-                f"SELECT * FROM memories WHERE memory_id IN ({placeholders})",
-                tuple(memory_ids),
-            )
+            if account_key is None:
+                cursor = self._connection.execute(
+                    f"SELECT * FROM memories WHERE memory_id IN ({placeholders})",
+                    tuple(memory_ids),
+                )
+            else:
+                normalized_account_key = self._normalize_account_key(account_key)
+                cursor = self._connection.execute(
+                    "SELECT * FROM memories "
+                    f"WHERE account_key = ? AND memory_id IN ({placeholders})",
+                    (normalized_account_key, *memory_ids),
+                )
             rows = cursor.fetchall()
         return [self._row_to_memory(row) for row in rows]
 
@@ -196,26 +243,43 @@ class SQLiteStorageManager:
         entity_id: str,
         intent: str,
         since_iso: str | None = None,
+        account_key: str | None = None,
     ) -> list[MemoryRecord]:
         with self._lock:
-            if since_iso is None:
+            if account_key is None and since_iso is None:
                 cursor = self._connection.execute(
                     "SELECT * FROM memories WHERE intent = ?",
                     (intent,),
                 )
-            else:
+            elif account_key is None:
                 cursor = self._connection.execute(
                     "SELECT * FROM memories WHERE intent = ? AND created_at >= ?",
                     (intent, since_iso),
+                )
+            elif since_iso is None:
+                normalized_account_key = self._normalize_account_key(account_key)
+                cursor = self._connection.execute(
+                    "SELECT * FROM memories WHERE account_key = ? AND intent = ?",
+                    (normalized_account_key, intent),
+                )
+            else:
+                normalized_account_key = self._normalize_account_key(account_key)
+                cursor = self._connection.execute(
+                    "SELECT * FROM memories "
+                    "WHERE account_key = ? AND intent = ? AND created_at >= ?",
+                    (normalized_account_key, intent, since_iso),
                 )
             rows = cursor.fetchall()
         records = [self._row_to_memory(row) for row in rows]
         return [record for record in records if entity_id in record.entities]
 
     def search_candidates(
-        self, query_embedding: NDArray[np.float32], top_k: int
+        self,
+        query_embedding: NDArray[np.float32],
+        top_k: int,
+        account_key: str | None = None,
     ) -> list[MemoryRecord]:
-        memories = self.list_memories()
+        memories = self.list_memories(account_key=account_key)
         if not memories:
             return []
         scored = []
@@ -230,25 +294,50 @@ class SQLiteStorageManager:
         scored.sort(key=lambda item: item[1], reverse=True)
         return [memory for memory, _ in scored[:top_k]]
 
-    def update_retrieval(self, memory_id: str) -> None:
+    def update_retrieval(self, memory_id: str, account_key: str | None = None) -> None:
         with self._lock:
-            self._connection.execute(
-                """
-                UPDATE memories
-                SET retrieval_count = retrieval_count + 1,
-                    updated_at = ?
-                WHERE memory_id = ?
-                """,
-                (datetime.now(UTC).isoformat(), memory_id),
-            )
+            if account_key is None:
+                self._connection.execute(
+                    """
+                    UPDATE memories
+                    SET retrieval_count = retrieval_count + 1,
+                        updated_at = ?
+                    WHERE memory_id = ?
+                    """,
+                    (datetime.now(UTC).isoformat(), memory_id),
+                )
+            else:
+                normalized_account_key = self._normalize_account_key(account_key)
+                self._connection.execute(
+                    """
+                    UPDATE memories
+                    SET retrieval_count = retrieval_count + 1,
+                        updated_at = ?
+                    WHERE account_key = ? AND memory_id = ?
+                    """,
+                    (datetime.now(UTC).isoformat(), normalized_account_key, memory_id),
+                )
             self._connection.commit()
 
-    def update_outcome(self, memory_id: str, outcome_signal: float) -> None:
+    def update_outcome(
+        self,
+        memory_id: str,
+        outcome_signal: float,
+        account_key: str | None = None,
+    ) -> None:
         with self._lock:
-            cursor = self._connection.execute(
-                "SELECT avg_outcome_signal, outcome_count FROM memories WHERE memory_id = ?",
-                (memory_id,),
-            )
+            if account_key is None:
+                cursor = self._connection.execute(
+                    "SELECT avg_outcome_signal, outcome_count FROM memories WHERE memory_id = ?",
+                    (memory_id,),
+                )
+            else:
+                normalized_account_key = self._normalize_account_key(account_key)
+                cursor = self._connection.execute(
+                    "SELECT avg_outcome_signal, outcome_count "
+                    "FROM memories WHERE account_key = ? AND memory_id = ?",
+                    (normalized_account_key, memory_id),
+                )
             row = cursor.fetchone()
             if row is None:
                 return
@@ -256,29 +345,57 @@ class SQLiteStorageManager:
             count = int(row["outcome_count"])
             new_count = count + 1
             new_avg = ((avg * count) + outcome_signal) / new_count
-            self._connection.execute(
-                """
-                UPDATE memories
-                SET avg_outcome_signal = ?, outcome_count = ?, updated_at = ?
-                WHERE memory_id = ?
-                """,
-                (new_avg, new_count, datetime.now(UTC).isoformat(), memory_id),
-            )
+            if account_key is None:
+                self._connection.execute(
+                    """
+                    UPDATE memories
+                    SET avg_outcome_signal = ?, outcome_count = ?, updated_at = ?
+                    WHERE memory_id = ?
+                    """,
+                    (new_avg, new_count, datetime.now(UTC).isoformat(), memory_id),
+                )
+            else:
+                self._connection.execute(
+                    """
+                    UPDATE memories
+                    SET avg_outcome_signal = ?, outcome_count = ?, updated_at = ?
+                    WHERE account_key = ? AND memory_id = ?
+                    """,
+                    (
+                        new_avg,
+                        new_count,
+                        datetime.now(UTC).isoformat(),
+                        normalized_account_key,
+                        memory_id,
+                    ),
+                )
             self._connection.commit()
 
     def close(self) -> None:
         with self._lock:
             self._connection.close()
 
-    def delete_memories(self, memory_ids: list[str]) -> None:
+    def delete_memories(
+        self,
+        memory_ids: list[str],
+        account_key: str | None = None,
+    ) -> None:
         if not memory_ids:
             return
         with self._lock:
             placeholders = ", ".join("?" for _ in memory_ids)
-            self._connection.execute(
-                f"DELETE FROM memories WHERE memory_id IN ({placeholders})",
-                tuple(memory_ids),
-            )
+            if account_key is None:
+                self._connection.execute(
+                    f"DELETE FROM memories WHERE memory_id IN ({placeholders})",
+                    tuple(memory_ids),
+                )
+            else:
+                normalized_account_key = self._normalize_account_key(account_key)
+                self._connection.execute(
+                    "DELETE FROM memories WHERE account_key = ? "
+                    f"AND memory_id IN ({placeholders})",
+                    (normalized_account_key, *memory_ids),
+                )
             self._connection.commit()
 
     def _truncate_content(self, content: str, intent: str) -> str:
@@ -313,6 +430,7 @@ class SQLiteStorageManager:
         if not raw_embedding or len(raw_embedding) != len(semantic_embedding):
             raw_embedding = semantic_embedding.copy()
         return MemoryRecord(
+            account_key=str(row["account_key"]) if row["account_key"] else "default",
             memory_id=str(row["memory_id"]),
             event_id=str(row["event_id"]),
             content=str(row["content"]),
@@ -334,3 +452,8 @@ class SQLiteStorageManager:
             is_compressed=bool(int(row["is_compressed"])),
             original_count=int(row["original_count"]),
         )
+
+    @staticmethod
+    def _normalize_account_key(account_key: str) -> str:
+        normalized = account_key.strip()
+        return normalized or "default"

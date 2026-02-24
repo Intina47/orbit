@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from memory_engine.storage.db import MemoryRow, initialize_sqlite_db
+from memory_engine.storage.db import ApiKeyRow, MemoryRow, initialize_sqlite_db
 
 
 def test_sqlalchemy_db_initialization_and_insert(tmp_path: Path) -> None:
     session_factory = initialize_sqlite_db(str(tmp_path / "sqlalchemy.db"))
     with session_factory() as session:
         row = MemoryRow(
+            account_key="acct_test",
             memory_id="m1",
             event_id="e1",
             content="content",
@@ -33,3 +34,20 @@ def test_sqlalchemy_db_initialization_and_insert(tmp_path: Path) -> None:
         saved = session.get(MemoryRow, "m1")
         assert saved is not None
         assert saved.intent == "interaction"
+
+        key_row = ApiKeyRow(
+            key_id="9d801f73-b6f6-4a43-80fd-6a7a7b3fbab7",
+            account_key="acct_test",
+            name="sdk-key",
+            key_prefix="orbit_pk_abc123abc123",
+            secret_salt="00" * 16,
+            secret_hash="11" * 32,
+            hash_iterations=1,
+            scopes_json=json.dumps(["read"]),
+            status="active",
+        )
+        session.add(key_row)
+        session.commit()
+        saved_key = session.get(ApiKeyRow, "9d801f73-b6f6-4a43-80fd-6a7a7b3fbab7")
+        assert saved_key is not None
+        assert saved_key.status == "active"

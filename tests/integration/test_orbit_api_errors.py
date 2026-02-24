@@ -8,6 +8,7 @@ import httpx
 import jwt
 
 from memory_engine.config import EngineConfig
+from orbit.models import IngestRequest
 from orbit_api.app import create_app
 from orbit_api.config import ApiConfig
 
@@ -38,7 +39,12 @@ def _build_app(tmp_path: Path, *, cors_allow_origins: list[str] | None = None):
     return create_app(api_config=api_config, engine_config=engine_config)
 
 
-def _jwt_token(subject: str = "error-user") -> str:
+def _jwt_token(
+    subject: str = "error-user",
+    *,
+    scopes: list[str] | None = None,
+    account_key: str | None = None,
+) -> str:
     now = datetime.now(UTC)
     payload = {
         "sub": subject,
@@ -46,8 +52,10 @@ def _jwt_token(subject: str = "error-user") -> str:
         "aud": JWT_AUDIENCE,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=1)).timestamp()),
-        "scopes": ["read", "write", "feedback"],
+        "scopes": scopes or ["read", "write", "feedback"],
     }
+    if account_key is not None:
+        payload["account_key"] = account_key
     return str(jwt.encode(payload, JWT_SECRET, algorithm="HS256"))
 
 
@@ -124,6 +132,49 @@ def test_api_auth_and_rate_limit_errors(tmp_path: Path) -> None:
     asyncio.run(_run())
 
 
+def test_api_scope_enforcement_errors(tmp_path: Path) -> None:
+    async def _run() -> None:
+        app = _build_app(tmp_path)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            ingest_forbidden = await client.post(
+                "/v1/ingest",
+                headers={
+                    "Authorization": (
+                        f"Bearer {_jwt_token('scope-user', scopes=['read'])}"
+                    )
+                },
+                json={"content": "hello", "event_type": "user_question"},
+            )
+            assert ingest_forbidden.status_code == 403
+
+            retrieve_forbidden = await client.get(
+                "/v1/retrieve",
+                headers={
+                    "Authorization": (
+                        f"Bearer {_jwt_token('scope-user', scopes=['write'])}"
+                    )
+                },
+                params={"query": "hello", "limit": 5},
+            )
+            assert retrieve_forbidden.status_code == 403
+
+            dashboard_forbidden = await client.get(
+                "/v1/dashboard/keys",
+                headers={
+                    "Authorization": (
+                        f"Bearer {_jwt_token('scope-user', scopes=['feedback'])}"
+                    )
+                },
+            )
+            assert dashboard_forbidden.status_code == 403
+
+    asyncio.run(_run())
+
+
 def test_api_idempotency_replay_and_conflict(tmp_path: Path) -> None:
     async def _run() -> None:
         app = _build_app(tmp_path)
@@ -183,20 +234,21 @@ def test_api_idempotency_replay_and_conflict(tmp_path: Path) -> None:
             )
             assert over_limit_new_key.status_code == 429
 
-            source_ingest = await client.post(
-                "/v1/ingest",
-                headers={"Authorization": f"Bearer {_jwt_token('source-user')}"},
-                json={
-                    "content": "feedback source memory",
-                    "event_type": "user_question",
-                    "entity_id": "source-user",
-                },
-            )
-            assert source_ingest.status_code == 201
-            source_memory_id = source_ingest.json()["memory_id"]
+            service = app.state.orbit_service
+            source_memory_id = service.ingest(
+                IngestRequest(
+                    content="feedback source memory",
+                    event_type="user_question",
+                    entity_id="feedback-user",
+                ),
+                account_key="feedback-user",
+            ).memory_id
 
             feedback_headers = {
-                "Authorization": f"Bearer {_jwt_token('feedback-user')}",
+                "Authorization": (
+                    "Bearer "
+                    f"{_jwt_token('feedback-user', account_key='feedback-user')}"
+                ),
                 "Idempotency-Key": "feedback-idem-1",
             }
             feedback_payload = {

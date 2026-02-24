@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
+import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -12,6 +14,7 @@ from pathlib import Path
 from threading import RLock
 from time import perf_counter
 from typing import Any, TypeVar
+from uuid import uuid4
 
 import numpy as np
 from sqlalchemy import create_engine, select
@@ -22,10 +25,22 @@ from decision_engine.models import MemoryRecord
 from memory_engine.config import EngineConfig
 from memory_engine.engine import DecisionEngine
 from memory_engine.models.event import Event
-from memory_engine.storage.db import ApiAccountUsageRow, ApiIdempotencyRow, Base
+from memory_engine.storage.db import (
+    ApiAccountUsageRow,
+    ApiAuditLogRow,
+    ApiDashboardUserRow,
+    ApiIdempotencyRow,
+    ApiKeyRow,
+    Base,
+)
 from orbit.models import (
     AccountQuota,
     AccountUsage,
+    ApiKeyIssueResponse,
+    ApiKeyListResponse,
+    ApiKeyRevokeResponse,
+    ApiKeyRotateResponse,
+    ApiKeySummary,
     AuthValidationResponse,
     FeedbackRequest,
     FeedbackResponse,
@@ -68,7 +83,21 @@ class IdempotencyConflictError(RuntimeError):
     """Raised when an idempotency key is reused with a different payload."""
 
 
+class ApiKeyAuthenticationError(RuntimeError):
+    """Raised when an API key cannot be authenticated."""
+
+
+class AccountMappingError(RuntimeError):
+    """Raised when dashboard account mapping cannot be resolved safely."""
+
+
 ResponseT = TypeVar("ResponseT")
+
+_API_KEY_PREFIX = "orbit_pk_"
+_API_KEY_PATTERN = re.compile(r"^orbit_pk_([a-z0-9]{12})_([A-Za-z0-9_-]{16,})$")
+_API_KEY_HASH_ALGORITHM = "sha256"
+_API_KEY_HASH_ITERATIONS = 310_000
+_DEFAULT_KEY_SCOPES = ["read", "write", "feedback"]
 
 
 @dataclass
@@ -130,6 +159,45 @@ class OrbitApiService:
         self._state_engine.dispose()
         self._engine.close()
 
+    def resolve_account_context(self, auth: AuthContext) -> AuthContext:
+        claims = dict(auth.claims)
+        if str(claims.get("auth_type", "")).strip().lower() == "api_key":
+            return auth
+        issuer = self._normalize_auth_issuer(claims.get("iss"))
+        subject = self._normalize_auth_subject(auth.subject)
+        account_key = self._account_key_from_claims(claims)
+        email = self._email_from_claims(claims)
+
+        if account_key is None:
+            mapped = self._lookup_dashboard_account_mapping(
+                auth_issuer=issuer,
+                auth_subject=subject,
+            )
+            if mapped is not None:
+                account_key = mapped
+            elif self._config.dashboard_auto_provision_accounts:
+                account_key = self._provision_dashboard_account_key(
+                    issuer=issuer,
+                    subject=subject,
+                )
+            else:
+                account_key = self._normalize_account_key(subject)
+        self._upsert_dashboard_account_mapping(
+            account_key=account_key,
+            auth_issuer=issuer,
+            auth_subject=subject,
+            email=email,
+        )
+        claims["account_key"] = account_key
+        claims["auth_subject"] = subject
+        claims["auth_issuer"] = issuer
+        return AuthContext(
+            subject=account_key,
+            scopes=auth.scopes,
+            token=auth.token,
+            claims=claims,
+        )
+
     def consume_event_quota(
         self, account_key: str, amount: int = 1
     ) -> RateLimitSnapshot:
@@ -154,7 +222,7 @@ class OrbitApiService:
             payload=request.model_dump(mode="json"),
             quota_kind="event",
             quota_amount=1,
-            execute=lambda: self.ingest(request),
+            execute=lambda: self.ingest(request, account_key=account_key),
             serialize=lambda response: response.model_dump(mode="json"),
             deserialize=IngestResponse.model_validate,
             status_code=201,
@@ -174,7 +242,7 @@ class OrbitApiService:
             payload=request.model_dump(mode="json"),
             quota_kind="event",
             quota_amount=1,
-            execute=lambda: self.feedback(request),
+            execute=lambda: self.feedback(request, account_key=account_key),
             serialize=lambda response: response.model_dump(mode="json"),
             deserialize=FeedbackResponse.model_validate,
             status_code=200,
@@ -195,7 +263,7 @@ class OrbitApiService:
             payload=payload,
             quota_kind="event",
             quota_amount=len(events),
-            execute=lambda: self.ingest_batch(events),
+            execute=lambda: self.ingest_batch(events, account_key=account_key),
             serialize=lambda responses: {
                 "items": [item.model_dump(mode="json") for item in responses]
             },
@@ -220,7 +288,7 @@ class OrbitApiService:
             payload=payload,
             quota_kind="event",
             quota_amount=len(feedback),
-            execute=lambda: self.feedback_batch(feedback),
+            execute=lambda: self.feedback_batch(feedback, account_key=account_key),
             serialize=lambda responses: {
                 "items": [item.model_dump(mode="json") for item in responses]
             },
@@ -231,8 +299,337 @@ class OrbitApiService:
             status_code=200,
         )
 
-    def ingest(self, request: IngestRequest) -> IngestResponse:
+    def issue_api_key(
+        self,
+        *,
+        account_key: str,
+        name: str,
+        scopes: list[str] | None = None,
+        actor_subject: str | None = None,
+        actor_type: str = "dashboard_user",
+    ) -> ApiKeyIssueResponse:
+        normalized_account_key = self._normalize_account_key(account_key)
+        normalized_name = self._normalize_api_key_name(name)
+        normalized_scopes = self._normalize_scopes(scopes)
+        scopes_json = json.dumps(
+            normalized_scopes,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+
+        for _ in range(5):
+            now = datetime.now(UTC)
+            key_id = str(uuid4())
+            key_prefix, key_secret, plaintext_key = self._generate_api_key_material()
+            salt = secrets.token_bytes(16)
+            secret_hash = self._hash_api_key_secret(
+                secret=key_secret,
+                salt=salt,
+                iterations=_API_KEY_HASH_ITERATIONS,
+            )
+
+            try:
+                with self._state_session_factory() as session, session.begin():
+                    session.add(
+                        ApiKeyRow(
+                            key_id=key_id,
+                            account_key=normalized_account_key,
+                            name=normalized_name,
+                            key_prefix=key_prefix,
+                            secret_salt=salt.hex(),
+                            secret_hash=secret_hash,
+                            hash_iterations=_API_KEY_HASH_ITERATIONS,
+                            scopes_json=scopes_json,
+                            status="active",
+                            created_at=now,
+                            last_used_at=None,
+                            last_used_source=None,
+                            revoked_at=None,
+                        )
+                    )
+                    self._insert_audit_row(
+                        session=session,
+                        account_key=normalized_account_key,
+                        actor_subject=actor_subject or normalized_account_key,
+                        actor_type=actor_type,
+                        action="api_key_issued",
+                        target_type="api_key",
+                        target_id=key_id,
+                        metadata={
+                            "key_prefix": key_prefix,
+                            "name": normalized_name,
+                            "scopes": normalized_scopes,
+                        },
+                    )
+                    session.flush()
+            except IntegrityError:
+                continue
+
+            return ApiKeyIssueResponse(
+                key_id=key_id,
+                name=normalized_name,
+                key_prefix=key_prefix,
+                scopes=normalized_scopes,
+                status="active",
+                created_at=now,
+                last_used_at=None,
+                last_used_source=None,
+                revoked_at=None,
+                key=plaintext_key,
+            )
+
+        msg = "Failed to issue API key. Please retry."
+        raise RuntimeError(msg)
+
+    def list_api_keys(
+        self,
+        *,
+        account_key: str,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> ApiKeyListResponse:
+        normalized_account_key = self._normalize_account_key(account_key)
+        normalized_limit = self._normalize_list_limit(limit)
+        offset = self._cursor_to_offset(cursor)
+        with self._state_session_factory() as session:
+            stmt = (
+                select(ApiKeyRow)
+                .where(ApiKeyRow.account_key == normalized_account_key)
+                .order_by(ApiKeyRow.created_at.desc())
+                .offset(offset)
+                .limit(normalized_limit + 1)
+            )
+            rows = list(session.execute(stmt).scalars())
+        has_more = len(rows) > normalized_limit
+        selected = rows[:normalized_limit]
+        next_cursor = str(offset + normalized_limit) if has_more else None
+        return ApiKeyListResponse(
+            data=[self._as_api_key_summary(row) for row in selected],
+            cursor=next_cursor,
+            has_more=has_more,
+        )
+
+    def revoke_api_key(
+        self,
+        *,
+        account_key: str,
+        key_id: str,
+        actor_subject: str | None = None,
+        actor_type: str = "dashboard_user",
+    ) -> ApiKeyRevokeResponse:
+        normalized_account_key = self._normalize_account_key(account_key)
+        normalized_key_id = self._normalize_key_id(key_id)
+        revoked_at: datetime | None = None
+        with self._state_session_factory() as session, session.begin():
+            stmt = (
+                select(ApiKeyRow)
+                .where(ApiKeyRow.account_key == normalized_account_key)
+                .where(ApiKeyRow.key_id == normalized_key_id)
+                .with_for_update()
+            )
+            row = session.execute(stmt).scalar_one_or_none()
+            if row is None:
+                msg = f"API key not found: {normalized_key_id}"
+                raise KeyError(msg)
+            if row.status != "revoked":
+                row.status = "revoked"
+                row.revoked_at = datetime.now(UTC)
+            revoked_at = row.revoked_at
+            self._insert_audit_row(
+                session=session,
+                account_key=normalized_account_key,
+                actor_subject=actor_subject or normalized_account_key,
+                actor_type=actor_type,
+                action="api_key_revoked",
+                target_type="api_key",
+                target_id=normalized_key_id,
+                metadata={"revoked_at": revoked_at.isoformat() if revoked_at else None},
+            )
+        return ApiKeyRevokeResponse(
+            key_id=normalized_key_id,
+            revoked=True,
+            revoked_at=revoked_at,
+        )
+
+    def rotate_api_key(
+        self,
+        *,
+        account_key: str,
+        key_id: str,
+        name: str | None = None,
+        scopes: list[str] | None = None,
+        actor_subject: str | None = None,
+        actor_type: str = "dashboard_user",
+    ) -> ApiKeyRotateResponse:
+        normalized_account_key = self._normalize_account_key(account_key)
+        normalized_key_id = self._normalize_key_id(key_id)
+        new_name = self._normalize_api_key_name(name) if name is not None else None
+        requested_scopes = self._normalize_scopes(scopes) if scopes is not None else None
+
+        for _ in range(5):
+            now = datetime.now(UTC)
+            new_key_id = str(uuid4())
+            key_prefix, key_secret, plaintext_key = self._generate_api_key_material()
+            salt = secrets.token_bytes(16)
+            secret_hash = self._hash_api_key_secret(
+                secret=key_secret,
+                salt=salt,
+                iterations=_API_KEY_HASH_ITERATIONS,
+            )
+            resolved_name = ""
+            resolved_scopes: list[str] = []
+            try:
+                with self._state_session_factory() as session, session.begin():
+                    existing = self._select_api_key_for_update(
+                        session=session,
+                        account_key=normalized_account_key,
+                        key_id=normalized_key_id,
+                    )
+                    if existing is None:
+                        msg = f"API key not found: {normalized_key_id}"
+                        raise KeyError(msg)
+                    if existing.status == "revoked":
+                        msg = f"API key already revoked: {normalized_key_id}"
+                        raise ValueError(msg)
+
+                    resolved_name = new_name or existing.name
+                    resolved_scopes = (
+                        requested_scopes
+                        if requested_scopes is not None
+                        else self._deserialize_scopes(existing.scopes_json)
+                    )
+                    if not resolved_scopes:
+                        resolved_scopes = list(_DEFAULT_KEY_SCOPES)
+                    scopes_json = json.dumps(
+                        resolved_scopes,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=True,
+                    )
+                    session.add(
+                        ApiKeyRow(
+                            key_id=new_key_id,
+                            account_key=normalized_account_key,
+                            name=resolved_name,
+                            key_prefix=key_prefix,
+                            secret_salt=salt.hex(),
+                            secret_hash=secret_hash,
+                            hash_iterations=_API_KEY_HASH_ITERATIONS,
+                            scopes_json=scopes_json,
+                            status="active",
+                            created_at=now,
+                            last_used_at=None,
+                            last_used_source=None,
+                            revoked_at=None,
+                        )
+                    )
+                    existing.status = "revoked"
+                    existing.revoked_at = now
+
+                    self._insert_audit_row(
+                        session=session,
+                        account_key=normalized_account_key,
+                        actor_subject=actor_subject or normalized_account_key,
+                        actor_type=actor_type,
+                        action="api_key_rotated",
+                        target_type="api_key",
+                        target_id=normalized_key_id,
+                        metadata={
+                            "new_key_id": new_key_id,
+                            "new_key_prefix": key_prefix,
+                            "name": resolved_name,
+                            "scopes": resolved_scopes,
+                        },
+                    )
+                    session.flush()
+            except IntegrityError:
+                continue
+
+            return ApiKeyRotateResponse(
+                revoked_key_id=normalized_key_id,
+                new_key=ApiKeyIssueResponse(
+                    key_id=new_key_id,
+                    name=resolved_name,
+                    key_prefix=key_prefix,
+                    scopes=resolved_scopes,
+                    status="active",
+                    created_at=now,
+                    last_used_at=None,
+                    last_used_source=None,
+                    revoked_at=None,
+                    key=plaintext_key,
+                ),
+            )
+
+        msg = "Failed to rotate API key. Please retry."
+        raise RuntimeError(msg)
+
+    def authenticate_api_key(self, token: str, *, source: str | None = None) -> AuthContext:
+        key_prefix, key_secret = self._parse_api_key_token(token)
+        with self._state_session_factory() as session, session.begin():
+            stmt = (
+                select(ApiKeyRow)
+                .where(ApiKeyRow.key_prefix == key_prefix)
+                .with_for_update()
+            )
+            row = session.execute(stmt).scalar_one_or_none()
+            if row is None:
+                msg = "API key not found."
+                raise ApiKeyAuthenticationError(msg)
+            if row.status != "active" or row.revoked_at is not None:
+                msg = "API key revoked."
+                raise ApiKeyAuthenticationError(msg)
+            try:
+                salt = bytes.fromhex(row.secret_salt)
+            except ValueError as exc:
+                msg = "Stored API key salt is malformed."
+                raise ApiKeyAuthenticationError(msg) from exc
+            expected_hash = self._hash_api_key_secret(
+                secret=key_secret,
+                salt=salt,
+                iterations=max(int(row.hash_iterations), 1),
+            )
+            if not hmac.compare_digest(expected_hash, row.secret_hash):
+                msg = "API key secret mismatch."
+                raise ApiKeyAuthenticationError(msg)
+            row.last_used_at = datetime.now(UTC)
+            row.last_used_source = self._normalize_optional_source(source)
+            scopes = self._deserialize_scopes(row.scopes_json)
+            if not scopes:
+                scopes = list(_DEFAULT_KEY_SCOPES)
+            resolved_source = row.last_used_source or "unknown"
+            self._insert_audit_row(
+                session=session,
+                account_key=row.account_key,
+                actor_subject=row.key_id,
+                actor_type="api_key",
+                action="api_key_authenticated",
+                target_type="api_key",
+                target_id=row.key_id,
+                metadata={"source": resolved_source},
+            )
+            claims = {
+                "auth_type": "api_key",
+                "key_id": row.key_id,
+                "key_prefix": row.key_prefix,
+                "account_key": row.account_key,
+            }
+            return AuthContext(
+                subject=row.account_key,
+                scopes=scopes,
+                token=token,
+                claims=claims,
+            )
+
+    def ingest(
+        self,
+        request: IngestRequest,
+        *,
+        account_key: str | None = None,
+    ) -> IngestResponse:
         start = perf_counter()
+        normalized_account_key = self._normalize_account_key(account_key)
         event = Event(
             entity_id=request.entity_id or self._config.default_entity_id,
             event_type=request.event_type or self._config.default_event_type,
@@ -240,8 +637,15 @@ class OrbitApiService:
             metadata=request.metadata or {},
         )
         processed = self._engine.process_input(event)
-        decision = self._engine.make_storage_decision(processed)
-        stored = self._engine.store_memory(processed, decision)
+        decision = self._engine.make_storage_decision(
+            processed,
+            account_key=normalized_account_key,
+        )
+        stored = self._engine.store_memory(
+            processed,
+            decision,
+            account_key=normalized_account_key,
+        )
         latency_ms = (perf_counter() - start) * 1000.0
 
         memory_id = (
@@ -269,11 +673,22 @@ class OrbitApiService:
             latency_ms=latency_ms,
         )
 
-    def ingest_batch(self, events: list[IngestRequest]) -> list[IngestResponse]:
-        return [self.ingest(item) for item in events]
+    def ingest_batch(
+        self,
+        events: list[IngestRequest],
+        *,
+        account_key: str | None = None,
+    ) -> list[IngestResponse]:
+        return [self.ingest(item, account_key=account_key) for item in events]
 
-    def retrieve(self, request: RetrieveRequest) -> RetrieveResponse:
+    def retrieve(
+        self,
+        request: RetrieveRequest,
+        *,
+        account_key: str | None = None,
+    ) -> RetrieveResponse:
         start = perf_counter()
+        normalized_account_key = self._normalize_account_key(account_key)
         query_embedding = np.asarray(
             self._engine.input_processor.encoder.encode_query(request.query),
             dtype=np.float32,
@@ -284,33 +699,55 @@ class OrbitApiService:
         if request.entity_id:
             entity_ids_fn = getattr(self._engine, "memory_ids_for_entity", None)
             entity_ids = (
-                entity_ids_fn(request.entity_id)
+                entity_ids_fn(
+                    request.entity_id,
+                    account_key=normalized_account_key,
+                )
                 if callable(entity_ids_fn)
                 else []
             )
-            preselected = self._engine.storage.fetch_by_ids(entity_ids)
+            preselected = self._engine.storage.fetch_by_ids(
+                entity_ids,
+                account_key=normalized_account_key,
+            )
             if not preselected:
                 vector_store = getattr(self._engine, "vector_store", None)
                 if vector_store is None:
                     preselected = self._engine.storage.search_candidates(
-                        query_embedding, top_k=pool_size
+                        query_embedding,
+                        top_k=pool_size,
+                        account_key=normalized_account_key,
                     )
                 else:
                     hits = vector_store.search(query_embedding, top_k=pool_size)
                     preselected = self._engine.storage.fetch_by_ids(
-                        [hit.memory_id for hit in hits]
+                        [hit.memory_id for hit in hits],
+                        account_key=normalized_account_key,
                     )
         else:
             vector_store = getattr(self._engine, "vector_store", None)
             if vector_store is not None:
                 hits = vector_store.search(query_embedding, top_k=pool_size)
                 preselected = self._engine.storage.fetch_by_ids(
-                    [hit.memory_id for hit in hits]
+                    [hit.memory_id for hit in hits],
+                    account_key=normalized_account_key,
                 )
             else:
                 preselected = self._engine.storage.search_candidates(
-                    query_embedding, top_k=pool_size
+                    query_embedding,
+                    top_k=pool_size,
+                    account_key=normalized_account_key,
                 )
+        if len(preselected) < request.limit:
+            fallback = self._engine.storage.search_candidates(
+                query_embedding,
+                top_k=max(pool_size, request.limit * 4),
+                account_key=normalized_account_key,
+            )
+            seen_ids = {item.memory_id for item in preselected}
+            preselected.extend(
+                item for item in fallback if item.memory_id not in seen_ids
+            )
         candidates = self._apply_filters(
             records=preselected,
             entity_id=request.entity_id,
@@ -326,6 +763,7 @@ class OrbitApiService:
             event_type=request.event_type,
             start_time=request.time_range.start if request.time_range else None,
             end_time=request.time_range.end if request.time_range else None,
+            account_key=normalized_account_key,
         )
         ranked = self._engine.ranker.rank(query_embedding, candidates, now=now)
         ranked = self._reweight_ranked_by_query(
@@ -344,7 +782,10 @@ class OrbitApiService:
         )
         memories: list[Memory] = []
         for index, ranked_item in enumerate(selected, start=1):
-            self._engine.storage.update_retrieval(ranked_item.memory.memory_id)
+            self._engine.storage.update_retrieval(
+                ranked_item.memory.memory_id,
+                account_key=normalized_account_key,
+            )
             memories.append(
                 self._as_memory(
                     ranked_item.memory,
@@ -374,9 +815,18 @@ class OrbitApiService:
             applied_filters=applied_filters,
         )
 
-    def feedback(self, request: FeedbackRequest) -> FeedbackResponse:
+    def feedback(
+        self,
+        request: FeedbackRequest,
+        *,
+        account_key: str | None = None,
+    ) -> FeedbackResponse:
         start = perf_counter()
-        existing = self._engine.storage.fetch_by_ids([request.memory_id])
+        normalized_account_key = self._normalize_account_key(account_key)
+        existing = self._engine.storage.fetch_by_ids(
+            [request.memory_id],
+            account_key=normalized_account_key,
+        )
         if not existing:
             msg = f"memory_id {request.memory_id} was not found"
             raise KeyError(msg)
@@ -392,6 +842,7 @@ class OrbitApiService:
             ranked_memory_ids=[request.memory_id],
             helpful_memory_ids=helpful_ids,
             outcome_signal=outcome_signal,
+            account_key=normalized_account_key,
         )
 
         latency_ms = (perf_counter() - start) * 1000.0
@@ -411,15 +862,20 @@ class OrbitApiService:
             updated_at=datetime.now(UTC),
         )
 
-    def feedback_batch(self, feedback: list[FeedbackRequest]) -> list[FeedbackResponse]:
-        return [self.feedback(item) for item in feedback]
+    def feedback_batch(
+        self,
+        feedback: list[FeedbackRequest],
+        *,
+        account_key: str | None = None,
+    ) -> list[FeedbackResponse]:
+        return [self.feedback(item, account_key=account_key) for item in feedback]
 
     def status(self, account_key: str) -> StatusResponse:
         now = datetime.now(UTC)
         with self._state_lock:
             latest_ingestion = self._latest_ingestion
         usage = self._read_usage_row(account_key)
-        storage_mb = self._storage_usage_mb()
+        storage_mb = self._storage_usage_mb(account_key=account_key)
         events_month = (
             usage.events_month
             if usage
@@ -491,7 +947,11 @@ class OrbitApiService:
         return "\n".join(lines) + "\n"
 
     def list_memories(
-        self, limit: int, cursor: str | None
+        self,
+        limit: int,
+        cursor: str | None,
+        *,
+        account_key: str | None = None,
     ) -> PaginatedMemoriesResponse:
         offset = 0
         if cursor:
@@ -501,7 +961,9 @@ class OrbitApiService:
                 offset = 0
 
         records = sorted(
-            self._engine.storage.list_memories(),
+            self._engine.storage.list_memories(
+                account_key=self._normalize_account_key(account_key)
+            ),
             key=lambda item: item.created_at,
             reverse=True,
         )
@@ -586,8 +1048,14 @@ class OrbitApiService:
         event_type: str | None,
         start_time: datetime | None,
         end_time: datetime | None,
+        account_key: str | None = None,
     ) -> list[MemoryRecord]:
-        records = self._engine.storage.list_memories()
+        if account_key is None:
+            records = self._engine.storage.list_memories()
+        else:
+            records = self._engine.storage.list_memories(
+                account_key=self._normalize_account_key(account_key)
+            )
         return self._apply_filters(records, entity_id, event_type, start_time, end_time)
 
     def _apply_filters(
@@ -1175,6 +1643,7 @@ class OrbitApiService:
         event_type: str | None,
         start_time: datetime | None,
         end_time: datetime | None,
+        account_key: str | None = None,
     ) -> list[MemoryRecord]:
         if top_k <= 0:
             return candidates
@@ -1190,7 +1659,14 @@ class OrbitApiService:
             return candidates
 
         fallback_pool = self._apply_filters(
-            records=self._engine.storage.list_memories(limit=max(pool_size, top_k * 8)),
+            records=(
+                self._engine.storage.list_memories(limit=max(pool_size, top_k * 8))
+                if account_key is None
+                else self._engine.storage.list_memories(
+                    limit=max(pool_size, top_k * 8),
+                    account_key=self._normalize_account_key(account_key),
+                )
+            ),
             entity_id=entity_id,
             event_type=event_type,
             start_time=start_time,
@@ -1430,6 +1906,110 @@ class OrbitApiService:
             .with_for_update()
         )
         return session.execute(stmt).scalar_one_or_none()
+
+    def _select_api_key_for_update(
+        self,
+        *,
+        session: Session,
+        account_key: str,
+        key_id: str,
+    ) -> ApiKeyRow | None:
+        stmt = (
+            select(ApiKeyRow)
+            .where(ApiKeyRow.account_key == account_key)
+            .where(ApiKeyRow.key_id == key_id)
+            .with_for_update()
+        )
+        return session.execute(stmt).scalar_one_or_none()
+
+    def _lookup_dashboard_account_mapping(
+        self,
+        *,
+        auth_issuer: str,
+        auth_subject: str,
+    ) -> str | None:
+        with self._state_session_factory() as session:
+            stmt = (
+                select(ApiDashboardUserRow.account_key)
+                .where(ApiDashboardUserRow.auth_issuer == auth_issuer)
+                .where(ApiDashboardUserRow.auth_subject == auth_subject)
+                .limit(1)
+            )
+            row = session.execute(stmt).one_or_none()
+            if row is None:
+                return None
+            return self._normalize_account_key(str(row[0]))
+
+    def _upsert_dashboard_account_mapping(
+        self,
+        *,
+        account_key: str,
+        auth_issuer: str,
+        auth_subject: str,
+        email: str | None,
+    ) -> None:
+        normalized_account_key = self._normalize_account_key(account_key)
+        with self._state_session_factory() as session, session.begin():
+            stmt = (
+                select(ApiDashboardUserRow)
+                .where(ApiDashboardUserRow.auth_issuer == auth_issuer)
+                .where(ApiDashboardUserRow.auth_subject == auth_subject)
+                .with_for_update()
+            )
+            row = session.execute(stmt).scalar_one_or_none()
+            now = datetime.now(UTC)
+            if row is None:
+                session.add(
+                    ApiDashboardUserRow(
+                        account_key=normalized_account_key,
+                        auth_issuer=auth_issuer,
+                        auth_subject=auth_subject,
+                        email=email,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+                return
+            existing_account_key = self._normalize_account_key(row.account_key)
+            if existing_account_key != normalized_account_key:
+                msg = (
+                    "Auth identity is already bound to a different account. "
+                    "Refusing unsafe reassignment."
+                )
+                raise AccountMappingError(msg)
+            row.email = email or row.email
+            row.updated_at = now
+
+    @staticmethod
+    def _insert_audit_row(
+        *,
+        session: Session,
+        account_key: str,
+        actor_subject: str,
+        actor_type: str,
+        action: str,
+        target_type: str,
+        target_id: str | None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        payload = metadata or {}
+        session.add(
+            ApiAuditLogRow(
+                account_key=account_key,
+                actor_subject=actor_subject,
+                actor_type=actor_type,
+                action=action,
+                target_type=target_type,
+                target_id=target_id,
+                metadata_json=json.dumps(
+                    payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                ),
+                created_at=datetime.now(UTC),
+            )
+        )
 
     def _execute_write_operation(
         self,
@@ -1699,7 +2279,207 @@ class OrbitApiService:
         digest = hashlib.sha256(canonical.encode("utf-8"))
         return digest.hexdigest()
 
-    def _storage_usage_mb(self) -> float:
+    @staticmethod
+    def _as_api_key_summary(row: ApiKeyRow) -> ApiKeySummary:
+        return ApiKeySummary(
+            key_id=row.key_id,
+            name=row.name,
+            key_prefix=row.key_prefix,
+            scopes=OrbitApiService._deserialize_scopes(row.scopes_json),
+            status=row.status,
+            created_at=row.created_at,
+            last_used_at=row.last_used_at,
+            last_used_source=row.last_used_source,
+            revoked_at=row.revoked_at,
+        )
+
+    @staticmethod
+    def _generate_api_key_material() -> tuple[str, str, str]:
+        public_part = secrets.token_hex(6)
+        secret_part = secrets.token_urlsafe(32).rstrip("=")
+        key_prefix = f"{_API_KEY_PREFIX}{public_part}"
+        key = f"{key_prefix}_{secret_part}"
+        return key_prefix, secret_part, key
+
+    @staticmethod
+    def _parse_api_key_token(token: str) -> tuple[str, str]:
+        normalized = token.strip()
+        match = _API_KEY_PATTERN.fullmatch(normalized)
+        if match is None:
+            msg = "API key format is invalid."
+            raise ApiKeyAuthenticationError(msg)
+        public_part = match.group(1)
+        secret_part = match.group(2)
+        return f"{_API_KEY_PREFIX}{public_part}", secret_part
+
+    @staticmethod
+    def _hash_api_key_secret(*, secret: str, salt: bytes, iterations: int) -> str:
+        derived = hashlib.pbkdf2_hmac(
+            _API_KEY_HASH_ALGORITHM,
+            secret.encode("utf-8"),
+            salt,
+            max(iterations, 1),
+        )
+        return derived.hex()
+
+    @staticmethod
+    def _deserialize_scopes(raw_scopes: str) -> list[str]:
+        try:
+            parsed = json.loads(raw_scopes)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in parsed:
+            value = str(item).strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            normalized.append(value)
+        return normalized
+
+    @staticmethod
+    def _normalize_api_key_name(value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            msg = "API key name cannot be empty"
+            raise ValueError(msg)
+        if len(normalized) > 128:
+            msg = "API key name cannot exceed 128 characters"
+            raise ValueError(msg)
+        return normalized
+
+    @staticmethod
+    def _normalize_scopes(scopes: list[str] | None) -> list[str]:
+        if scopes is None:
+            return list(_DEFAULT_KEY_SCOPES)
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for scope in scopes:
+            value = scope.strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            normalized.append(value)
+        if not normalized:
+            return list(_DEFAULT_KEY_SCOPES)
+        return normalized
+
+    @staticmethod
+    def _normalize_key_id(value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            msg = "key_id cannot be empty"
+            raise ValueError(msg)
+        if len(normalized) > 36:
+            msg = "key_id cannot exceed 36 characters"
+            raise ValueError(msg)
+        return normalized
+
+    @staticmethod
+    def _normalize_list_limit(value: int) -> int:
+        if value <= 0:
+            msg = "limit must be a positive integer"
+            raise ValueError(msg)
+        return min(value, 100)
+
+    @staticmethod
+    def _cursor_to_offset(cursor: str | None) -> int:
+        if cursor is None:
+            return 0
+        normalized = cursor.strip()
+        if not normalized:
+            return 0
+        try:
+            value = int(normalized)
+        except ValueError:
+            return 0
+        return max(value, 0)
+
+    @staticmethod
+    def _normalize_optional_source(value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if len(normalized) > 128:
+            return normalized[:128]
+        return normalized
+
+    @staticmethod
+    def _normalize_auth_subject(value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            msg = "Auth subject cannot be empty"
+            raise AccountMappingError(msg)
+        if len(normalized) > 255:
+            return normalized[:255]
+        return normalized
+
+    def _normalize_auth_issuer(self, value: Any) -> str:
+        raw = str(value or "").strip()
+        normalized = raw or self._config.jwt_issuer.strip() or "orbit"
+        if len(normalized) > 255:
+            return normalized[:255]
+        return normalized
+
+    def _account_key_from_claims(self, claims: dict[str, Any]) -> str | None:
+        candidates = (
+            claims.get("account_key"),
+            claims.get("acct"),
+            claims.get("tenant"),
+            claims.get("org"),
+            claims.get("organization"),
+        )
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            normalized = self._normalize_account_key(str(candidate))
+            if normalized != "default":
+                return normalized
+        return None
+
+    @staticmethod
+    def _email_from_claims(claims: dict[str, Any]) -> str | None:
+        raw_email = claims.get("email")
+        if raw_email is None:
+            return None
+        normalized = str(raw_email).strip().lower()
+        if not normalized:
+            return None
+        if len(normalized) > 320:
+            return normalized[:320]
+        return normalized
+
+    @staticmethod
+    def _provision_dashboard_account_key(*, issuer: str, subject: str) -> str:
+        digest = hashlib.sha256(f"{issuer}:{subject}".encode()).hexdigest()
+        return f"acct_{digest[:24]}"
+
+    def _storage_usage_mb(self, account_key: str | None = None) -> float:
+        if account_key is not None:
+            normalized_account_key = self._normalize_account_key(account_key)
+            account_records = self._engine.storage.list_memories(
+                account_key=normalized_account_key
+            )
+            if not account_records:
+                return 0.0
+            approx_bytes = 0
+            for record in account_records:
+                approx_bytes += len(record.content.encode("utf-8"))
+                approx_bytes += len(record.summary.encode("utf-8"))
+                approx_bytes += len(record.intent.encode("utf-8"))
+                approx_bytes += sum(len(item.encode("utf-8")) for item in record.entities)
+                approx_bytes += sum(
+                    len(item.encode("utf-8")) for item in record.relationships
+                )
+                approx_bytes += len(record.semantic_embedding) * 4
+                approx_bytes += len(record.raw_embedding) * 4
+            return float(approx_bytes) / (1024.0 * 1024.0)
+
         storage = self._engine.storage
         size_method = getattr(storage, "storage_usage_mb", None)
         if callable(size_method):
@@ -1728,6 +2508,13 @@ class OrbitApiService:
         if not updates:
             return base
         return base.model_copy(update=updates)
+
+    @staticmethod
+    def _normalize_account_key(account_key: str | None) -> str:
+        if account_key is None:
+            return "default"
+        normalized = account_key.strip()
+        return normalized or "default"
 
 
 def _tokenize_query(query: str) -> set[str]:

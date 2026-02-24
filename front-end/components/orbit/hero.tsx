@@ -40,6 +40,7 @@ export function Hero() {
           </div>
           <div className="hidden md:flex items-center gap-8 text-xs tracking-wider text-muted-foreground">
             <Link href="/docs" className="hover:text-foreground transition-colors">DOCS</Link>
+            <Link href="/dashboard" className="hover:text-foreground transition-colors">DASHBOARD</Link>
             <a href="#problem" className="hover:text-foreground transition-colors">PROBLEM</a>
             <a href="#how-it-works" className="hover:text-foreground transition-colors">HOW IT WORKS</a>
             <a href="#comparison" className="hover:text-foreground transition-colors">COMPARISON</a>

@@ -167,6 +167,89 @@ class AuthValidationResponse(OrbitModel):
     scopes: list[str] = Field(default_factory=list)
 
 
+class ApiKeyCreateRequest(OrbitModel):
+    name: str
+    scopes: list[str] = Field(default_factory=list)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            msg = "name cannot be empty"
+            raise ValueError(msg)
+        if len(normalized) > 128:
+            msg = "name cannot exceed 128 characters"
+            raise ValueError(msg)
+        return normalized
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, value: list[str]) -> list[str]:
+        normalized = [item.strip() for item in value if item.strip()]
+        return list(dict.fromkeys(normalized))
+
+
+class ApiKeySummary(OrbitModel):
+    key_id: str
+    name: str
+    key_prefix: str
+    scopes: list[str] = Field(default_factory=list)
+    status: str
+    created_at: datetime
+    last_used_at: datetime | None = None
+    last_used_source: str | None = None
+    revoked_at: datetime | None = None
+
+
+class ApiKeyIssueResponse(ApiKeySummary):
+    key: str
+
+
+class ApiKeyListResponse(OrbitModel):
+    data: list[ApiKeySummary]
+    cursor: str | None = None
+    has_more: bool = False
+
+
+class ApiKeyRevokeResponse(OrbitModel):
+    key_id: str
+    revoked: bool
+    revoked_at: datetime | None = None
+
+
+class ApiKeyRotateRequest(OrbitModel):
+    name: str | None = None
+    scopes: list[str] | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_optional_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            msg = "name cannot be empty when provided"
+            raise ValueError(msg)
+        if len(normalized) > 128:
+            msg = "name cannot exceed 128 characters"
+            raise ValueError(msg)
+        return normalized
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_optional_scopes(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalized = [item.strip() for item in value if item.strip()]
+        return list(dict.fromkeys(normalized))
+
+
+class ApiKeyRotateResponse(OrbitModel):
+    revoked_key_id: str
+    new_key: ApiKeyIssueResponse
+
+
 class PaginatedMemoriesResponse(OrbitModel):
     data: list[Memory]
     cursor: str | None = None

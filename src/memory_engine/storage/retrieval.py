@@ -31,26 +31,38 @@ class RetrievalService:
         )
 
     def retrieve(
-        self, query: str, top_k: int = 5, candidate_pool_size: int | None = None
+        self,
+        query: str,
+        top_k: int = 5,
+        candidate_pool_size: int | None = None,
+        account_key: str | None = None,
     ) -> list[RetrievedMemory]:
         query_embedding = self._encoder.encode_query(query)
         pool_size = candidate_pool_size or max(80, top_k * 12)
 
         if self._vector_store is not None:
             hits = self._vector_store.search(query_embedding, top_k=pool_size)
-            candidates = self._storage.fetch_by_ids([hit.memory_id for hit in hits])
+            candidates = self._storage.fetch_by_ids(
+                [hit.memory_id for hit in hits],
+                account_key=account_key,
+            )
             if not candidates:
                 candidates = self._storage.search_candidates(
-                    np.asarray(query_embedding, dtype=np.float32), top_k=pool_size
+                    np.asarray(query_embedding, dtype=np.float32),
+                    top_k=pool_size,
+                    account_key=account_key,
                 )
         else:
             candidates = self._storage.search_candidates(
-                np.asarray(query_embedding, dtype=np.float32), top_k=pool_size
+                np.asarray(query_embedding, dtype=np.float32),
+                top_k=pool_size,
+                account_key=account_key,
             )
         candidates = self._ensure_non_assistant_candidates(
             candidates,
             top_k=top_k,
             pool_size=pool_size,
+            account_key=account_key,
         )
 
         ranked = self._ranker.rank(
@@ -60,7 +72,10 @@ class RetrievalService:
         )
         selected = self._select_with_intent_caps(ranked, top_k=top_k)
         for item in selected:
-            self._storage.update_retrieval(item.memory.memory_id)
+            self._storage.update_retrieval(
+                item.memory.memory_id,
+                account_key=account_key,
+            )
         return selected
 
     def _select_with_intent_caps(
@@ -96,6 +111,7 @@ class RetrievalService:
         *,
         top_k: int,
         pool_size: int,
+        account_key: str | None,
     ) -> list[MemoryRecord]:
         if top_k <= 0:
             return candidates
@@ -106,7 +122,10 @@ class RetrievalService:
         if current_non_assistant >= required_non_assistant:
             return candidates
 
-        fallback_pool = self._storage.list_memories(limit=max(pool_size, top_k * 8))
+        fallback_pool = self._storage.list_memories(
+            limit=max(pool_size, top_k * 8),
+            account_key=account_key,
+        )
         seen_ids = {item.memory_id for item in candidates}
         enriched = list(candidates)
         for memory in fallback_pool:

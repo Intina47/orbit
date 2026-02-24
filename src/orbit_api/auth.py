@@ -15,7 +15,7 @@ from orbit_api.config import ApiConfig
 
 @dataclass(frozen=True)
 class AuthContext:
-    """Validated authentication context extracted from a JWT."""
+    """Validated authentication context extracted from JWT or API key auth."""
 
     subject: str
     scopes: list[str]

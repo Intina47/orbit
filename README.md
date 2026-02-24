@@ -207,6 +207,8 @@ Response headers include:
 - Live Orbit + Ollama chatbot: `examples/live_chatbot_ollama/`
 - OpenClaw memory plugin scaffold: `integrations/openclaw-memory/`
 - API + deployment runbook: `docs/DEPLOY_RENDER_VERCEL.md`
+- GCP Cloud Run deployment runbook: `docs/DEPLOY_GCP_CLOUD_RUN.md`
+- GCP environment matrix: `docs/GCP_ENV_MATRIX.md`
 
 ## Evaluation and Quality
 
@@ -259,6 +261,10 @@ make run-api
 ## Documentation
 
 - Canonical developer integration guide: `docs/developer_documentation.md`
+- Deployment (Render/Vercel): `docs/DEPLOY_RENDER_VERCEL.md`
+- Deployment (GCP Cloud Run): `docs/DEPLOY_GCP_CLOUD_RUN.md`
+- GCP env matrix: `docs/GCP_ENV_MATRIX.md`
+- Cloud dashboard/API-key plan: `docs/ORBIT_CLOUD_DASHBOARD_PLAN.md`
 - Build and implementation log: `BUILD_AND_SPEC.md`
 - Repo metadata for discovery: `metaData.md`
 

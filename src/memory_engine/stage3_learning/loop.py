@@ -26,10 +26,16 @@ class LearningLoop:
         self._log = EngineLogger()
 
     def record_feedback(
-        self, feedback: OutcomeFeedback, query_embedding: list[float]
+        self,
+        feedback: OutcomeFeedback,
+        query_embedding: list[float],
+        account_key: str | None = None,
     ) -> dict[str, float | None]:
         now = datetime.now(UTC)
-        memories = self._storage.fetch_by_ids(feedback.ranked_memory_ids)
+        memories = self._storage.fetch_by_ids(
+            feedback.ranked_memory_ids,
+            account_key=account_key,
+        )
         helpful_ids = set(feedback.helpful_memory_ids)
         losses: list[float] = []
         for memory in memories:
@@ -41,7 +47,11 @@ class LearningLoop:
             )
             loss = self._weight_updater.apply(memory, signal, age_days)
             losses.append(loss)
-            self._storage.update_outcome(memory.memory_id, signal)
+            self._storage.update_outcome(
+                memory.memory_id,
+                signal,
+                account_key=account_key,
+            )
 
         rank_loss = self._ranker.learn_from_feedback(
             query_embedding=np.asarray(query_embedding, dtype=np.float32),

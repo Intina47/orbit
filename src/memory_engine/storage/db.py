@@ -23,6 +23,7 @@ class Base(DeclarativeBase):
 class MemoryRow(Base):
     __tablename__ = "memories"
 
+    account_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     memory_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     event_id: Mapped[str] = mapped_column(String(64), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -88,6 +89,72 @@ class ApiIdempotencyRow(Base):
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+class ApiKeyRow(Base):
+    __tablename__ = "api_keys"
+    __table_args__ = (
+        UniqueConstraint("key_prefix", name="uq_api_keys_key_prefix"),
+    )
+
+    key_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    account_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    key_prefix: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    secret_salt: Mapped[str] = mapped_column(String(64), nullable=False)
+    secret_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    hash_iterations: Mapped[int] = mapped_column(Integer, nullable=False)
+    scopes_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_used_source: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class ApiDashboardUserRow(Base):
+    __tablename__ = "api_dashboard_users"
+    __table_args__ = (
+        UniqueConstraint(
+            "auth_issuer",
+            "auth_subject",
+            name="uq_api_dashboard_users_auth_identity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    auth_issuer: Mapped[str] = mapped_column(String(255), nullable=False)
+    auth_subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+class ApiAuditLogRow(Base):
+    __tablename__ = "api_audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    actor_subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    actor_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
 

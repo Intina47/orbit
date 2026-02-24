@@ -123,7 +123,11 @@ class AdaptivePersonalizationEngine:
         self._preference_state_by_entity: dict[str, _PreferenceState] = {}
         self._lock = threading.RLock()
 
-    def observe_memory(self, memory: MemoryRecord) -> list[InferredMemoryCandidate]:
+    def observe_memory(
+        self,
+        memory: MemoryRecord,
+        account_key: str | None = None,
+    ) -> list[InferredMemoryCandidate]:
         if not self._enabled:
             return []
         intent = memory.intent.strip().lower()
@@ -145,6 +149,7 @@ class AdaptivePersonalizationEngine:
             repeated_topic_candidate = self._infer_repeat_topic_cluster(
                 memory=memory,
                 entity_id=entity_id,
+                account_key=account_key,
             )
             if repeated_topic_candidate is not None:
                 candidates.append(repeated_topic_candidate)
@@ -152,6 +157,7 @@ class AdaptivePersonalizationEngine:
             recurring_failure_candidate = self._infer_recurring_failure(
                 memory=memory,
                 entity_id=entity_id,
+                account_key=account_key,
             )
             if recurring_failure_candidate is not None:
                 candidates.append(recurring_failure_candidate)
@@ -159,6 +165,7 @@ class AdaptivePersonalizationEngine:
             progress_candidate = self._infer_progress_accumulation(
                 memory=memory,
                 entity_id=entity_id,
+                account_key=account_key,
             )
             if progress_candidate is not None:
                 candidates.append(progress_candidate)
@@ -169,6 +176,7 @@ class AdaptivePersonalizationEngine:
         *,
         memory: MemoryRecord,
         entity_id: str,
+        account_key: str | None = None,
     ) -> InferredMemoryCandidate | None:
         since_iso = (
             datetime.now(UTC) - timedelta(days=self._window_days)
@@ -177,6 +185,7 @@ class AdaptivePersonalizationEngine:
             entity_id=entity_id,
             intent=memory.intent.strip().lower(),
             since_iso=since_iso,
+            account_key=account_key,
         )
         history = [item for item in history if not self._is_inferred_memory(item)]
         if len(history) < self._repeat_threshold:
@@ -194,6 +203,7 @@ class AdaptivePersonalizationEngine:
             entity_id=entity_id,
             inference_type="repeat_question_cluster",
             topic_summary=topic_summary,
+            account_key=account_key,
         )
         if reservation is None:
             return None
@@ -240,12 +250,14 @@ class AdaptivePersonalizationEngine:
         *,
         memory: MemoryRecord,
         entity_id: str,
+        account_key: str | None = None,
     ) -> InferredMemoryCandidate | None:
         if not self._is_failure_signal(memory):
             return None
         history = self._recent_entity_memories(
             entity_id=entity_id,
             intents=self._FAILURE_SOURCE_INTENTS,
+            account_key=account_key,
         )
         history = [item for item in history if self._is_failure_signal(item)]
         if len(history) < self._repeat_threshold:
@@ -265,6 +277,7 @@ class AdaptivePersonalizationEngine:
             entity_id=entity_id,
             inference_type="recurring_failure_pattern",
             topic_summary=topic_summary,
+            account_key=account_key,
         )
         if reservation is None:
             return None
@@ -311,12 +324,14 @@ class AdaptivePersonalizationEngine:
         *,
         memory: MemoryRecord,
         entity_id: str,
+        account_key: str | None = None,
     ) -> InferredMemoryCandidate | None:
         if not self._is_progress_signal(memory):
             return None
         history = self._recent_entity_memories(
             entity_id=entity_id,
             intents=self._PROGRESS_SOURCE_INTENTS,
+            account_key=account_key,
         )
         history = [item for item in history if self._is_progress_signal(item)]
         if len(history) < self._repeat_threshold:
@@ -336,6 +351,7 @@ class AdaptivePersonalizationEngine:
             entity_id=entity_id,
             inference_type="progress_accumulation",
             topic_summary=topic_summary,
+            account_key=account_key,
         )
         if reservation is None:
             return None
@@ -381,6 +397,7 @@ class AdaptivePersonalizationEngine:
         ranked_memories: list[MemoryRecord],
         helpful_memory_ids: set[str],
         outcome_signal: float,
+        account_key: str | None = None,
     ) -> list[InferredMemoryCandidate]:
         if not self._enabled:
             return []
@@ -401,6 +418,7 @@ class AdaptivePersonalizationEngine:
                 style=style,
                 signal=abs(outcome_signal),
                 source_memory_id=memory.memory_id,
+                account_key=account_key,
             )
             if candidate is not None:
                 candidates.append(candidate)
@@ -412,10 +430,11 @@ class AdaptivePersonalizationEngine:
         *,
         entity_id: str,
         intents: set[str],
+        account_key: str | None = None,
     ) -> list[MemoryRecord]:
         since = datetime.now(UTC) - timedelta(days=self._window_days)
         filtered: list[MemoryRecord] = []
-        for memory in self._storage.list_memories():
+        for memory in self._storage.list_memories(account_key=account_key):
             if entity_id not in memory.entities:
                 continue
             if memory.created_at < since:
@@ -433,6 +452,7 @@ class AdaptivePersonalizationEngine:
         entity_id: str,
         inference_type: str,
         topic_summary: str,
+        account_key: str | None = None,
     ) -> _SignatureReservation | None:
         now = datetime.now(UTC)
         refresh_window = timedelta(days=self._inferred_refresh_days)
@@ -452,6 +472,7 @@ class AdaptivePersonalizationEngine:
         existing = self._signature_memories_in_storage(
             entity_id=entity_id,
             signature=signature,
+            account_key=account_key,
         )
         if existing:
             freshest = max(existing, key=lambda memory: memory.created_at)
@@ -475,22 +496,26 @@ class AdaptivePersonalizationEngine:
         *,
         entity_id: str,
         signature: str,
+        account_key: str | None = None,
     ) -> list[MemoryRecord]:
         signature_marker = f"signature:{signature}"
         matches: list[MemoryRecord] = []
-        for memory in self._storage.list_memories():
+        for memory in self._storage.list_memories(account_key=account_key):
             if entity_id not in memory.entities:
                 continue
             if signature_marker in memory.relationships:
                 matches.append(memory)
         return matches
 
-    def expired_inferred_memory_ids(self) -> list[str]:
+    def expired_inferred_memory_ids(
+        self,
+        account_key: str | None = None,
+    ) -> list[str]:
         if not self._enabled:
             return []
         cutoff = datetime.now(UTC) - timedelta(days=self._inferred_ttl_days)
         expired: list[str] = []
-        for memory in self._storage.list_memories():
+        for memory in self._storage.list_memories(account_key=account_key):
             if not self._is_inferred_memory(memory):
                 continue
             if memory.created_at < cutoff:
@@ -515,6 +540,7 @@ class AdaptivePersonalizationEngine:
         style: str,
         signal: float,
         source_memory_id: str,
+        account_key: str | None = None,
     ) -> InferredMemoryCandidate | None:
         delta = max(signal, 0.1)
         with self._lock:
@@ -539,7 +565,10 @@ class AdaptivePersonalizationEngine:
             if abs(margin) < self._preference_margin:
                 return None
             preferred_style = "concise" if margin > 0 else "detailed"
-            explicit_style = self._explicit_style_preference(entity_id)
+            explicit_style = self._explicit_style_preference(
+                entity_id,
+                account_key=account_key,
+            )
             if (
                 explicit_style is not None
                 and explicit_style != preferred_style
@@ -617,9 +646,13 @@ class AdaptivePersonalizationEngine:
         if len(values) > limit:
             del values[: len(values) - limit]
 
-    def _explicit_style_preference(self, entity_id: str) -> str | None:
+    def _explicit_style_preference(
+        self,
+        entity_id: str,
+        account_key: str | None = None,
+    ) -> str | None:
         candidates = sorted(
-            self._storage.list_memories(),
+            self._storage.list_memories(account_key=account_key),
             key=lambda memory: memory.created_at,
             reverse=True,
         )

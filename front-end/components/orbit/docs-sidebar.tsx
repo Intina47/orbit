@@ -40,6 +40,7 @@ const sections = [
   {
     title: "Operations",
     items: [
+      { label: "Cloud Dashboard", href: "/dashboard" },
       { label: "Deployment", href: "/docs/deployment" },
       { label: "Configuration", href: "/docs/configuration" },
       { label: "Monitoring", href: "/docs/monitoring" },
