@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meal Coach: Orbit vs Baseline</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --ink: #17212b;
+      --muted: #516173;
+      --line: #d7e0ea;
+      --accent: #0f766e;
+      --accent-strong: #0b5f59;
+      --danger: #be123c;
+      --chip: #ecfdf5;
+      --radius: 14px;
+      --shadow: 0 12px 28px rgba(23, 33, 43, 0.1);
+      --font: "Inter", "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background: radial-gradient(80rem 45rem at -10% -10%, rgba(45, 212, 191, 0.2), transparent), var(--bg);
+      color: var(--ink);
+    }
+
+    .shell {
+      width: min(1080px, 94vw);
+      margin: 24px auto;
+      display: grid;
+      gap: 16px;
+    }
+
+    .hero, .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .hero { padding: 18px; }
+    .hero h1 { margin: 0; font-size: 1.45rem; }
+    .hero p { margin: 6px 0 0; color: var(--muted); }
+
+    .chips { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .chip {
+      background: var(--chip);
+      border: 1px solid #b7edd8;
+      color: #065f46;
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.5fr 1fr;
+      gap: 16px;
+    }
+
+    .panel { padding: 14px; }
+    .panel h2 { margin: 0 0 10px; font-size: 1.05rem; }
+
+    label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin: 0 0 6px;
+    }
+
+    input, select, textarea, button {
+      font: inherit;
+    }
+
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 10px;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 140px;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .feed {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fbfdff;
+      min-height: 330px;
+      max-height: 450px;
+      overflow: auto;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .bubble {
+      border-radius: 10px;
+      padding: 10px;
+      white-space: pre-wrap;
+      line-height: 1.4;
+      font-size: 0.92rem;
+      border: 1px solid transparent;
+    }
+
+    .bubble.user { background: #e9f5ff; border-color: #bfdbfe; margin-left: 10%; }
+    .bubble.assistant { background: #f8fafc; border-color: #e2e8f0; margin-right: 10%; }
+    .bubble.system { background: #eff6ff; border-color: #c7d2fe; color: #1e3a8a; }
+
+    .composer { margin-top: 10px; display: grid; gap: 8px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 9px 12px;
+      cursor: pointer;
+      transition: transform 100ms ease, opacity 100ms ease;
+    }
+
+    button:hover { transform: translateY(-1px); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-strong); }
+    .btn-ghost { background: #edf2f7; color: #1f2937; border: 1px solid #dbe2ea; }
+    .btn-danger { background: #ffe4ea; color: #9f1239; border: 1px solid #f8bfd0; }
+
+    .meta { font-size: 0.82rem; color: var(--muted); margin-top: 8px; min-height: 18px; }
+    .danger { color: var(--danger); }
+
+    .list {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      max-height: 280px;
+      overflow: auto;
+      padding: 8px;
+      display: grid;
+      gap: 6px;
+      background: #fcfdff;
+    }
+
+    .item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      font-size: 0.84rem;
+      background: #fff;
+    }
+
+    .feedback-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.76rem;
+      color: #334155;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    @media (max-width: 960px) {
+      .grid { grid-template-columns: 1fr; }
+      .row { grid-template-columns: 1fr; }
+      .feedback-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <h1>Personalized Meal Coach: Baseline vs Orbit</h1>
+      <p>Same Ollama model, two memory modes. Baseline uses short local history. Orbit uses persistent retrieval via SDK.</p>
+      <div class="chips">
+        <span class="chip">LLM: Ollama</span>
+        <span class="chip">Modes: baseline | orbit</span>
+        <span class="chip">Orbit endpoints: /chat /feedback /context</span>
+      </div>
+    </section>
+
+    <section class="grid">
+      <section class="panel">
+        <h2>Chat Playground</h2>
+        <div class="row">
+          <div>
+            <label for="user-id">User ID</label>
+            <input id="user-id" value="ava" autocomplete="off">
+          </div>
+          <div>
+            <label for="mode">Mode</label>
+            <select id="mode">
+              <option value="baseline">baseline</option>
+              <option value="orbit" selected>orbit</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="feed" class="feed"></div>
+
+        <form id="chat-form" class="composer">
+          <div>
+            <label for="message">Message</label>
+            <textarea id="message" rows="4" placeholder="Example: I need quick high-protein dinner ideas for this week."></textarea>
+          </div>
+          <div class="actions">
+            <button id="send-btn" type="submit" class="btn-primary">Send</button>
+            <button id="seed-btn" type="button" class="btn-ghost">Seed Demo Profile (Orbit)</button>
+            <button id="reset-btn" type="button" class="btn-danger">Reset Baseline History</button>
+          </div>
+        </form>
+
+        <div id="chat-meta" class="meta">Ready.</div>
+
+        <h2 style="margin-top:16px">Retrieved Context Preview</h2>
+        <div id="context-preview" class="list"></div>
+
+        <h2 style="margin-top:16px">Memory Feedback</h2>
+        <div id="feedback-list" class="list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Orbit Context Inspector</h2>
+        <form id="inspect-form" class="composer">
+          <div>
+            <label for="inspect-query">Inspection Query</label>
+            <textarea id="inspect-query" rows="3" placeholder="What should I know about this user before suggesting meals?"></textarea>
+          </div>
+          <div>
+            <label for="inspect-limit">Limit</label>
+            <input id="inspect-limit" type="number" min="1" max="20" value="5">
+          </div>
+          <button id="inspect-btn" type="submit" class="btn-primary">Inspect Orbit Retrieval</button>
+        </form>
+
+        <div id="inspect-meta" class="meta"></div>
+        <div id="inspect-results" class="list"></div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const feedEl = document.getElementById("feed");
+    const chatFormEl = document.getElementById("chat-form");
+    const sendBtnEl = document.getElementById("send-btn");
+    const messageEl = document.getElementById("message");
+    const userIdEl = document.getElementById("user-id");
+    const modeEl = document.getElementById("mode");
+    const seedBtnEl = document.getElementById("seed-btn");
+    const resetBtnEl = document.getElementById("reset-btn");
+    const chatMetaEl = document.getElementById("chat-meta");
+    const contextPreviewEl = document.getElementById("context-preview");
+    const feedbackListEl = document.getElementById("feedback-list");
+
+    const inspectFormEl = document.getElementById("inspect-form");
+    const inspectQueryEl = document.getElementById("inspect-query");
+    const inspectLimitEl = document.getElementById("inspect-limit");
+    const inspectBtnEl = document.getElementById("inspect-btn");
+    const inspectMetaEl = document.getElementById("inspect-meta");
+    const inspectResultsEl = document.getElementById("inspect-results");
+
+    function shortId(value) {
+      if (!value || value.length < 14) return value;
+      return value.slice(0, 8) + "..." + value.slice(-4);
+    }
+
+    function setMeta(el, text, isError = false) {
+      el.textContent = text;
+      el.className = "meta" + (isError ? " danger" : "");
+    }
+
+    function bubble(role, text) {
+      const node = document.createElement("div");
+      node.className = "bubble " + role;
+      node.textContent = text;
+      feedEl.appendChild(node);
+      feedEl.scrollTop = feedEl.scrollHeight;
+    }
+
+    function renderContextPreview(items) {
+      contextPreviewEl.innerHTML = "";
+      if (!items || !items.length) {
+        const empty = document.createElement("div");
+        empty.className = "item";
+        empty.textContent = "No context items returned.";
+        contextPreviewEl.appendChild(empty);
+        return;
+      }
+      for (const item of items) {
+        const row = document.createElement("div");
+        row.className = "item";
+        row.textContent = item;
+        contextPreviewEl.appendChild(row);
+      }
+    }
+
+    function renderFeedback(memoryIds, mode) {
+      feedbackListEl.innerHTML = "";
+      if (mode !== "orbit") {
+        const note = document.createElement("div");
+        note.className = "item";
+        note.textContent = "Baseline mode has no Orbit memory IDs to rate.";
+        feedbackListEl.appendChild(note);
+        return;
+      }
+      if (!memoryIds.length) {
+        const empty = document.createElement("div");
+        empty.className = "item";
+        empty.textContent = "No memory IDs returned.";
+        feedbackListEl.appendChild(empty);
+        return;
+      }
+      for (const memoryId of memoryIds) {
+        const row = document.createElement("div");
+        row.className = "item feedback-row";
+
+        const idEl = document.createElement("div");
+        idEl.className = "mono";
+        idEl.title = memoryId;
+        idEl.textContent = shortId(memoryId);
+
+        const helpfulBtn = document.createElement("button");
+        helpfulBtn.type = "button";
+        helpfulBtn.className = "btn-ghost";
+        helpfulBtn.textContent = "Helpful";
+        helpfulBtn.addEventListener("click", () => sendFeedback(memoryId, true));
+
+        const unhelpfulBtn = document.createElement("button");
+        unhelpfulBtn.type = "button";
+        unhelpfulBtn.className = "btn-danger";
+        unhelpfulBtn.textContent = "Unhelpful";
+        unhelpfulBtn.addEventListener("click", () => sendFeedback(memoryId, false));
+
+        row.appendChild(idEl);
+        row.appendChild(helpfulBtn);
+        row.appendChild(unhelpfulBtn);
+        feedbackListEl.appendChild(row);
+      }
+    }
+
+    async function sendFeedback(memoryId, helpful) {
+      try {
+        const response = await fetch("/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ memory_id: memoryId, helpful, outcome_value: helpful ? 1.0 : -1.0 })
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        setMeta(chatMetaEl, "Feedback recorded for " + shortId(memoryId));
+      } catch (err) {
+        setMeta(chatMetaEl, String(err), true);
+      }
+    }
+
+    async function sendChat(event) {
+      event.preventDefault();
+      const userId = userIdEl.value.trim();
+      const message = messageEl.value.trim();
+      const mode = modeEl.value;
+      if (!userId || !message) {
+        setMeta(chatMetaEl, "User ID and message are required.", true);
+        return;
+      }
+
+      bubble("user", "[" + mode + "] " + message);
+      sendBtnEl.disabled = true;
+      setMeta(chatMetaEl, "Calling /chat ...");
+
+      try {
+        const response = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: userId, message, mode })
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+
+        const payload = await response.json();
+        bubble("assistant", payload.response);
+        renderContextPreview(payload.context_preview || []);
+        renderFeedback(payload.memory_ids || [], payload.mode || mode);
+        const note = payload.note ? " | " + payload.note : "";
+        setMeta(chatMetaEl, "Context items: " + payload.context_items + note);
+      } catch (err) {
+        bubble("system", "Request failed: " + String(err));
+        setMeta(chatMetaEl, String(err), true);
+      } finally {
+        sendBtnEl.disabled = false;
+        messageEl.value = "";
+        messageEl.focus();
+      }
+    }
+
+    async function seedProfile() {
+      const userId = userIdEl.value.trim();
+      if (!userId) {
+        setMeta(chatMetaEl, "User ID is required to seed profile.", true);
+        return;
+      }
+      seedBtnEl.disabled = true;
+      setMeta(chatMetaEl, "Seeding profile into Orbit ...");
+      const payload = {
+        user_id: userId,
+        goals: ["Lose 4kg in 2 months", "Eat higher protein on weekdays"],
+        allergies: ["Peanuts"],
+        dislikes: ["Mushrooms"],
+        preferred_cuisines: ["Mediterranean", "Mexican"],
+        budget: "medium",
+        cooking_level: "beginner",
+        extra_notes: "Weeknight dinners should be under 25 minutes."
+      };
+
+      try {
+        const response = await fetch("/seed-profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        const result = await response.json();
+        setMeta(chatMetaEl, "Seeded profile events: " + result.events_written);
+      } catch (err) {
+        setMeta(chatMetaEl, String(err), true);
+      } finally {
+        seedBtnEl.disabled = false;
+      }
+    }
+
+    async function resetBaseline() {
+      const userId = userIdEl.value.trim();
+      if (!userId) {
+        setMeta(chatMetaEl, "User ID is required to reset history.", true);
+        return;
+      }
+      try {
+        const response = await fetch("/reset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: userId })
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        const result = await response.json();
+        feedEl.innerHTML = "";
+        renderContextPreview([]);
+        renderFeedback([], "baseline");
+        setMeta(chatMetaEl, result.note + " (cleared=" + result.baseline_cleared + ")");
+      } catch (err) {
+        setMeta(chatMetaEl, String(err), true);
+      }
+    }
+
+    async function inspectContext(event) {
+      event.preventDefault();
+      const userId = userIdEl.value.trim();
+      const query = inspectQueryEl.value.trim();
+      const limit = Number(inspectLimitEl.value || 5);
+      if (!userId || !query) {
+        setMeta(inspectMetaEl, "User ID and query are required.", true);
+        return;
+      }
+
+      inspectBtnEl.disabled = true;
+      setMeta(inspectMetaEl, "Calling /context ...");
+      try {
+        const response = await fetch("/context", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: userId,
+            query,
+            limit: Math.max(1, Math.min(20, limit || 5))
+          })
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+
+        const payload = await response.json();
+        inspectResultsEl.innerHTML = "";
+        for (const memory of payload.memories || []) {
+          const card = document.createElement("div");
+          card.className = "item";
+          const prefix = `#${memory.rank_position} | intent=${memory.intent} | score=${memory.rank_score.toFixed(3)}`;
+          card.textContent = prefix + "\n" + memory.content;
+          inspectResultsEl.appendChild(card);
+        }
+        if (!payload.memories || !payload.memories.length) {
+          const empty = document.createElement("div");
+          empty.className = "item";
+          empty.textContent = "No memories returned.";
+          inspectResultsEl.appendChild(empty);
+        }
+        setMeta(
+          inspectMetaEl,
+          "Candidates: " + payload.total_candidates + " | Latency: " + payload.query_execution_time_ms.toFixed(2) + "ms"
+        );
+      } catch (err) {
+        setMeta(inspectMetaEl, String(err), true);
+      } finally {
+        inspectBtnEl.disabled = false;
+      }
+    }
+
+    chatFormEl.addEventListener("submit", sendChat);
+    seedBtnEl.addEventListener("click", seedProfile);
+    resetBtnEl.addEventListener("click", resetBaseline);
+    inspectFormEl.addEventListener("submit", inspectContext);
+
+    bubble("system", "Ready. Start with Seed Demo Profile in orbit mode, then compare with baseline mode.");
+  </script>
+</body>
+</html>

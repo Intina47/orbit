@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
+from examples._env import load_env_file
 from orbit import MemoryEngine
 
 try:
@@ -19,10 +20,11 @@ except ImportError as exc:  # pragma: no cover - optional local runtime dependen
 
 app = FastAPI(title="Orbit + Ollama Coding Tutor")
 UI_FILE = Path(__file__).with_name("index.html")
+load_env_file(start=Path(__file__).resolve().parent)
 
 ORBIT_TOKEN = os.getenv("ORBIT_JWT_TOKEN", "")
 if not ORBIT_TOKEN:
-    raise RuntimeError("Set ORBIT_JWT_TOKEN to a valid Orbit JWT token.")
+    raise RuntimeError("Set ORBIT_JWT_TOKEN in .env (or process env) to a valid Orbit JWT token.")
 
 orbit = MemoryEngine(
     api_key=ORBIT_TOKEN,

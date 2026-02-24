@@ -35,19 +35,22 @@ python scripts/generate_jwt.py \
   --subject local-dev
 ```
 
-Export token:
+## 3) Configure `.env`
 
-```bash
-export ORBIT_JWT_TOKEN="<paste-token>"
+Create/update root `.env` file:
+
+```env
+ORBIT_JWT_TOKEN=<paste-token>
+ORBIT_API_BASE_URL=http://localhost:8000
+OLLAMA_HOST=http://localhost:11434
+OLLAMA_MODEL=llama3.1
 ```
 
-## 3) Run Chatbot API
+This example auto-loads the nearest `.env` file at startup.
+
+## 4) Run Chatbot API
 
 ```bash
-export ORBIT_API_BASE_URL="http://localhost:8000"
-export OLLAMA_HOST="http://localhost:11434"
-export OLLAMA_MODEL="llama3.1"
-
 python -m uvicorn examples.live_chatbot_ollama.app:app --reload --port 8010
 ```
 
@@ -62,7 +65,7 @@ From the UI you can:
 - inspect current retrieval ordering from Orbit (`/context`).
 - observe inferred personalization memories (`inferred_learning_pattern`, `inferred_preference`) once enough signal is present.
 
-## 4) Run Live Chat Test
+## 5) Run Live Chat Test
 
 ```bash
 curl -X POST http://localhost:8010/chat \
@@ -91,7 +94,7 @@ You should eventually see inferred profile signals in returned metadata:
 - repeated-topic patterns after similar questions,
 - preference signals after helpful feedback on assistant responses.
 
-## 5) Observe Metrics
+## 6) Observe Metrics
 
 - Orbit metrics: `http://localhost:8000/v1/metrics`
 - Prometheus: `http://localhost:9090`

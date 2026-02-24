@@ -9,6 +9,8 @@ memory.db
 *.db
 *.idx
 .env
+.env.local
+.env.*.local
 .venv/
 .env.testpypi
 .env.pypi

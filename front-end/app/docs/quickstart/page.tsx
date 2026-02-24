@@ -13,8 +13,18 @@ export default function QuickstartPage() {
         Quickstart
       </h1>
       <p className="text-muted-foreground text-base leading-relaxed max-w-xl mb-12">
-        Wire Orbit into your app in five steps: install, initialize, ingest, retrieve, feedback.
+        This is the fast integration loop after setup: install, initialize, ingest, retrieve, feedback.
       </p>
+
+      <div className="border border-primary/30 bg-primary/5 p-6 mb-12">
+        <div className="flex items-center gap-2 mb-3">
+          <div className="w-2 h-2 bg-primary" />
+          <h3 className="text-sm font-bold text-primary">Before you start</h3>
+        </div>
+        <p className="text-sm text-muted-foreground leading-relaxed">
+          First choose your installation route on <a href="/docs/installation" className="text-primary hover:underline">Installation & Setup</a>: Orbit Cloud (API key) or Self-Hosted Orbit (local JWT + local API URL).
+        </p>
+      </div>
 
       {/* Step 1 */}
       <div className="mb-12">
@@ -40,12 +50,16 @@ export default function QuickstartPage() {
           <h2 className="text-xl font-bold text-foreground">Create a client</h2>
         </div>
         <p className="text-muted-foreground text-sm leading-relaxed mb-4">
-          Use a JWT scoped for your Orbit API runtime.
+          Use API key for Cloud or JWT token for Self-Hosted. Same SDK call, different credential source.
         </p>
         <CodeBlock
-          code={`from orbit import MemoryEngine
+          code={`import os
+from orbit import MemoryEngine
 
-engine = MemoryEngine(api_key="<jwt-token>")`}
+engine = MemoryEngine(
+    api_key=os.getenv("ORBIT_API_KEY") or os.getenv("ORBIT_JWT_TOKEN"),
+    base_url=os.getenv("ORBIT_BASE_URL") or os.getenv("ORBIT_API_BASE_URL", "http://localhost:8000"),
+)`}
           language="python"
           filename="app.py"
         />

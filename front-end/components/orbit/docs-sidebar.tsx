@@ -10,7 +10,7 @@ const sections = [
     items: [
       { label: "Overview", href: "/docs" },
       { label: "Quickstart", href: "/docs/quickstart" },
-      { label: "Installation", href: "/docs/installation" },
+      { label: "Installation & Setup", href: "/docs/installation" },
     ],
   },
   {

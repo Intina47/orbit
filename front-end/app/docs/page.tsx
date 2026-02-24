@@ -3,10 +3,10 @@ import Link from "next/link"
 const sections = [
   {
     title: "Getting Started",
-    description: "Install Orbit, run the first ingest and retrieve call, and verify the loop in minutes.",
+    description: "Pick Cloud vs Self-Hosted setup, install Orbit, and run your first end-to-end memory loop in minutes.",
     links: [
       { label: "Quickstart", href: "/docs/quickstart" },
-      { label: "Installation", href: "/docs/installation" },
+      { label: "Installation & Setup Routes", href: "/docs/installation" },
     ],
   },
   {
