@@ -48,3 +48,9 @@ ORBIT_AUTO_MIGRATE=true
 - Metrics endpoint: `GET /v1/metrics`
 - Prometheus UI: `http://localhost:9090`
 - OTel exporter endpoint: `ORBIT_OTEL_EXPORTER_ENDPOINT`
+- Alert rules: `deploy/prometheus/alerts-orbit.yml`
+  - `OrbitApiSpike401403429`
+  - `OrbitApiSpike5xx`
+  - `OrbitDashboardAuthFailures`
+  - `OrbitDashboardKeyRotationFailures`
+- Dashboard login failures are emitted as structured frontend proxy logs (`dashboard_login_failure`, `dashboard_login_locked`) for log-based alerting.

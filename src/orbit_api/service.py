@@ -149,7 +149,10 @@ class OrbitApiService:
             "ingest_latency_ms_sum": 0.0,
             "retrieve_latency_ms_sum": 0.0,
             "feedback_latency_ms_sum": 0.0,
+            "dashboard_auth_failures_total": 0.0,
+            "dashboard_key_rotation_failures_total": 0.0,
         }
+        self._http_status_counts: dict[int, float] = {}
 
     @property
     def config(self) -> ApiConfig:
@@ -925,11 +928,30 @@ class OrbitApiService:
     def validate_token(self, auth: AuthContext) -> AuthValidationResponse:
         return AuthValidationResponse(valid=True, scopes=auth.scopes)
 
+    def record_http_response(self, status_code: int) -> None:
+        with self._state_lock:
+            self._http_status_counts[status_code] = (
+                self._http_status_counts.get(status_code, 0.0) + 1.0
+            )
+
+    def record_dashboard_auth_failure(self) -> None:
+        with self._state_lock:
+            self._metrics["dashboard_auth_failures_total"] += 1
+
+    def record_dashboard_key_rotation_failure(self) -> None:
+        with self._state_lock:
+            self._metrics["dashboard_key_rotation_failures_total"] += 1
+
     def metrics_text(self) -> str:
         with self._state_lock:
             ingest_total = self._metrics["ingest_requests_total"]
             retrieve_total = self._metrics["retrieve_requests_total"]
             feedback_total = self._metrics["feedback_requests_total"]
+            dashboard_auth_failures = self._metrics["dashboard_auth_failures_total"]
+            key_rotation_failures = self._metrics[
+                "dashboard_key_rotation_failures_total"
+            ]
+            status_counts = dict(self._http_status_counts)
         lines = [
             "# HELP orbit_ingest_requests_total Total ingest requests.",
             "# TYPE orbit_ingest_requests_total counter",
@@ -940,10 +962,27 @@ class OrbitApiService:
             "# HELP orbit_feedback_requests_total Total feedback requests.",
             "# TYPE orbit_feedback_requests_total counter",
             f"orbit_feedback_requests_total {feedback_total:.0f}",
+            "# HELP orbit_dashboard_auth_failures_total Dashboard auth failures observed by API.",
+            "# TYPE orbit_dashboard_auth_failures_total counter",
+            f"orbit_dashboard_auth_failures_total {dashboard_auth_failures:.0f}",
+            "# HELP orbit_dashboard_key_rotation_failures_total Dashboard key-rotation failures.",
+            "# TYPE orbit_dashboard_key_rotation_failures_total counter",
+            f"orbit_dashboard_key_rotation_failures_total {key_rotation_failures:.0f}",
             "# HELP orbit_uptime_seconds Process uptime in seconds.",
             "# TYPE orbit_uptime_seconds gauge",
             f"orbit_uptime_seconds {self._uptime_seconds():.3f}",
         ]
+        lines.extend(
+            [
+                "# HELP orbit_http_responses_total API responses by status code.",
+                "# TYPE orbit_http_responses_total counter",
+            ]
+        )
+        for status_code in sorted(status_counts):
+            lines.append(
+                f'orbit_http_responses_total{{status_code="{status_code}"}} '
+                f"{status_counts[status_code]:.0f}"
+            )
         return "\n".join(lines) + "\n"
 
     def list_memories(

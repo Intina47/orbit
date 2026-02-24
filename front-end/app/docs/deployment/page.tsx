@@ -67,17 +67,24 @@ export default function DeploymentPage() {
         Host the Orbit frontend on Vercel and point it at your Orbit API runtime.
       </p>
       <p className="text-muted-foreground text-sm leading-relaxed mb-4">
-        Browser clients never receive the Orbit dashboard bearer token. It stays server-side and is injected by Next.js proxy routes.
+        Browser clients never receive Orbit API bearer credentials. Next.js proxy routes exchange dashboard sessions for short-lived tenant-scoped JWTs.
       </p>
       <CodeBlock
         code={`NEXT_PUBLIC_ORBIT_API_BASE_URL=https://api.your-orbit-domain.com
 # Optional if different from NEXT_PUBLIC_ORBIT_API_BASE_URL:
 # ORBIT_DASHBOARD_PROXY_BASE_URL=https://api.your-orbit-domain.com
-ORBIT_DASHBOARD_SERVER_BEARER_TOKEN=<orbit-dashboard-service-token>
-ORBIT_DASHBOARD_AUTH_MODE=password
-ORBIT_DASHBOARD_AUTH_PASSWORD=<strong-password>
+ORBIT_DASHBOARD_PROXY_AUTH_MODE=exchange
+ORBIT_DASHBOARD_ORBIT_JWT_SECRET=<same-secret-as-orbit-api-jwt-verifier>
+# Optional exchange controls:
+# ORBIT_DASHBOARD_ORBIT_JWT_ISSUER=orbit
+# ORBIT_DASHBOARD_ORBIT_JWT_AUDIENCE=orbit-api
+# ORBIT_DASHBOARD_ORBIT_JWT_TTL_SECONDS=300
+ORBIT_DASHBOARD_AUTH_MODE=oidc
+ORBIT_DASHBOARD_OIDC_ISSUER_URL=https://accounts.google.com
+ORBIT_DASHBOARD_OIDC_CLIENT_ID=<client-id>
+ORBIT_DASHBOARD_OIDC_CLIENT_SECRET=<client-secret>
 ORBIT_DASHBOARD_SESSION_SECRET=<long-random-secret>
-# Optional (seconds):
+# Optional:
 # ORBIT_DASHBOARD_SESSION_TTL_SECONDS=43200`}
         language="bash"
         filename="front-end/.env.local"

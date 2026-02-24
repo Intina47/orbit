@@ -52,6 +52,7 @@ export function DashboardConsole() {
 
   const [authState, setAuthState] = useState<AuthState>("checking")
   const [authMode, setAuthMode] = useState<OrbitDashboardSessionResponse["mode"]>("password")
+  const [oidcLoginPath, setOidcLoginPath] = useState("/api/dashboard/auth/oidc/start")
   const [authPassword, setAuthPassword] = useState("")
   const [authError, setAuthError] = useState<string | null>(null)
   const [isSigningIn, setIsSigningIn] = useState(false)
@@ -110,6 +111,19 @@ export function DashboardConsole() {
       isCancelled = true
     }
   }, [client])
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return
+    }
+    const authErrorCode = new URLSearchParams(window.location.search)
+      .get("auth_error")
+      ?.trim()
+    if (!authErrorCode) {
+      return
+    }
+    setAuthError(describeAuthError(authErrorCode))
+  }, [])
 
   useEffect(() => {
     if (authState !== "signed_in") {
@@ -176,6 +190,9 @@ export function DashboardConsole() {
 
   const applySession = (session: OrbitDashboardSessionResponse) => {
     setAuthMode(session.mode)
+    if (session.oidc_login_path) {
+      setOidcLoginPath(session.oidc_login_path)
+    }
     setAuthState(session.authenticated ? "signed_in" : "signed_out")
   }
 
@@ -184,6 +201,11 @@ export function DashboardConsole() {
       setAuthState("signed_in")
       setAuthError(null)
       refreshFirstPage()
+      return
+    }
+    if (authMode === "oidc") {
+      setAuthError(null)
+      window.location.assign(oidcLoginPath || "/api/dashboard/auth/oidc/start")
       return
     }
 
@@ -390,8 +412,7 @@ export function DashboardConsole() {
         <CardHeader>
           <CardTitle>Connection</CardTitle>
           <CardDescription>
-            Browser requests go to <code className="text-primary">/api/dashboard/*</code>. The server proxy injects auth from{" "}
-            <code className="text-primary">ORBIT_DASHBOARD_SERVER_BEARER_TOKEN</code> and forwards to{" "}
+            Browser requests go to <code className="text-primary">/api/dashboard/*</code>. The server proxy exchanges your dashboard session for short-lived Orbit JWTs and forwards to{" "}
             <code className="text-primary">{apiBaseUrl}</code>.
           </CardDescription>
         </CardHeader>
@@ -405,7 +426,7 @@ export function DashboardConsole() {
               {isAuthenticated ? <ShieldCheck className="h-3.5 w-3.5" /> : <ShieldOff className="h-3.5 w-3.5" />}
               {authState === "checking" ? "Checking session..." : isAuthenticated ? "Signed in" : "Signed out"}
             </span>
-            {isAuthenticated && authMode === "password" && (
+            {isAuthenticated && authMode !== "disabled" && (
               <Button size="sm" variant="outline" onClick={handleSignOut} disabled={isSigningOut}>
                 <LogOut className="h-4 w-4" />
                 {isSigningOut ? "Signing out..." : "Sign out"}
@@ -416,9 +437,9 @@ export function DashboardConsole() {
             No Orbit Bearer token is stored in localStorage or exposed to client-side JavaScript.
           </p>
           <p className="text-xs text-muted-foreground">
-            Required server envs: <code className="text-primary">ORBIT_DASHBOARD_SERVER_BEARER_TOKEN</code>,{" "}
-            <code className="text-primary">ORBIT_DASHBOARD_SESSION_SECRET</code>, and{" "}
-            <code className="text-primary">ORBIT_DASHBOARD_AUTH_PASSWORD</code>.
+            Required server envs: <code className="text-primary">ORBIT_DASHBOARD_SESSION_SECRET</code>,{" "}
+            <code className="text-primary">ORBIT_DASHBOARD_ORBIT_JWT_SECRET</code>, and auth mode variables
+            (<code className="text-primary">ORBIT_DASHBOARD_AUTH_MODE</code> + password or OIDC config).
           </p>
         </CardContent>
       </Card>
@@ -443,6 +464,15 @@ export function DashboardConsole() {
                 />
                 <Button onClick={handleSignIn} disabled={isSigningIn || authState === "checking"}>
                   {isSigningIn ? "Signing in..." : "Sign in"}
+                </Button>
+              </>
+            ) : authMode === "oidc" ? (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Sign in with your OIDC identity provider. Orbit mints tenant-scoped short-lived JWTs server-side.
+                </p>
+                <Button onClick={handleSignIn} disabled={authState === "checking"}>
+                  Continue with SSO
                 </Button>
               </>
             ) : (
@@ -795,4 +825,21 @@ function formatDate(value: string): string {
     return value
   }
   return date.toLocaleString()
+}
+
+function describeAuthError(code: string): string {
+  const normalized = code.trim().toLowerCase()
+  if (normalized === "oidc_provider_error") {
+    return "OIDC provider returned an authentication error."
+  }
+  if (normalized === "oidc_state_invalid") {
+    return "OIDC state validation failed. Retry login."
+  }
+  if (normalized === "oidc_exchange_failed") {
+    return "Failed to exchange OIDC authorization code."
+  }
+  if (normalized === "oidc_disabled") {
+    return "OIDC login path was called while OIDC mode is disabled."
+  }
+  return "Authentication flow failed. Retry sign-in."
 }

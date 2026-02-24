@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 
 import {
   buildDashboardSessionStatus,
-  dashboardSessionConfigError,
+  dashboardLoginConfigError,
 } from "@/lib/dashboard-auth"
 
 export const runtime = "nodejs"
@@ -13,7 +13,7 @@ const NO_STORE_HEADERS = {
 }
 
 export async function GET(request: NextRequest) {
-  const configError = dashboardSessionConfigError()
+  const configError = dashboardLoginConfigError()
   if (configError) {
     return NextResponse.json({ detail: configError }, { status: 500, headers: NO_STORE_HEADERS })
   }

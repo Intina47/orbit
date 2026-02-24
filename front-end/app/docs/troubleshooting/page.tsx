@@ -5,8 +5,10 @@ export default function TroubleshootingPage() {
       title: "Unauthorized",
       fixes: [
         "If using dashboard UI, sign in again to refresh the HTTP-only dashboard session cookie.",
-        "Verify ORBIT_DASHBOARD_SERVER_BEARER_TOKEN is valid for /v1/dashboard/keys endpoints.",
-        "Check ORBIT_DASHBOARD_AUTH_PASSWORD and ORBIT_DASHBOARD_SESSION_SECRET are set on the frontend server.",
+        "In exchange mode, verify ORBIT_DASHBOARD_ORBIT_JWT_SECRET matches the Orbit API JWT verifier secret.",
+        "If using OIDC mode, verify ORBIT_DASHBOARD_OIDC_* settings and callback URL are correct.",
+        "If using static mode, verify ORBIT_DASHBOARD_SERVER_BEARER_TOKEN is valid for /v1/dashboard/keys endpoints.",
+        "Check ORBIT_DASHBOARD_AUTH_MODE and ORBIT_DASHBOARD_SESSION_SECRET are set on the frontend server.",
         "If calling Orbit API directly, verify Bearer token is a valid JWT signed with ORBIT_JWT_SECRET.",
         "Confirm token includes sub, iat, exp, iss, and aud claims.",
         "Check iss and aud values match ORBIT_JWT_ISSUER and ORBIT_JWT_AUDIENCE.",

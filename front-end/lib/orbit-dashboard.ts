@@ -43,8 +43,12 @@ export type OrbitApiKeyRotateRequest = {
 
 export type OrbitDashboardSessionResponse = {
   authenticated: boolean
-  mode: "password" | "disabled"
+  mode: "password" | "oidc" | "disabled"
   subject?: string
+  email?: string
+  name?: string
+  provider?: "password" | "oidc" | "disabled"
+  oidc_login_path?: string
 }
 
 const DEFAULT_PROXY_PREFIX = "/api/dashboard"

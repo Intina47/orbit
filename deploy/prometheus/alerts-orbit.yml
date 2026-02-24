@@ -1,0 +1,42 @@
+groups:
+  - name: orbit-api-alerts
+    rules:
+      - alert: OrbitApiSpike401403429
+        expr: sum(increase(orbit_http_responses_total{status_code=~"401|403|429"}[10m])) > 30
+        for: 5m
+        labels:
+          severity: warning
+          service: orbit-api
+        annotations:
+          summary: "Orbit API auth/rate-limit spike"
+          description: "401/403/429 responses increased above threshold in the last 10m."
+
+      - alert: OrbitApiSpike5xx
+        expr: sum(increase(orbit_http_responses_total{status_code=~"5.."}[10m])) > 10
+        for: 3m
+        labels:
+          severity: critical
+          service: orbit-api
+        annotations:
+          summary: "Orbit API 5xx spike"
+          description: "5xx responses increased above threshold in the last 10m."
+
+      - alert: OrbitDashboardAuthFailures
+        expr: increase(orbit_dashboard_auth_failures_total[15m]) > 20
+        for: 5m
+        labels:
+          severity: warning
+          service: orbit-api
+        annotations:
+          summary: "Orbit dashboard auth failures are elevated"
+          description: "Dashboard auth failures exceeded threshold. Check session/JWT/OIDC configuration."
+
+      - alert: OrbitDashboardKeyRotationFailures
+        expr: increase(orbit_dashboard_key_rotation_failures_total[30m]) > 3
+        for: 5m
+        labels:
+          severity: critical
+          service: orbit-api
+        annotations:
+          summary: "Orbit dashboard key rotations are failing"
+          description: "Key rotation failures exceeded threshold. Investigate dashboard key lifecycle path."

@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from "next/server"
 
 import {
   DASHBOARD_SESSION_COOKIE_NAME,
+  enforceDashboardOrigin,
   getDashboardAuthMode,
   getDashboardSessionClearCookieOptions,
+  logDashboardAuthEvent,
 } from "@/lib/dashboard-auth"
 
 export const runtime = "nodejs"
@@ -13,7 +15,12 @@ const NO_STORE_HEADERS = {
   "Cache-Control": "no-store",
 }
 
-export async function POST(_request: NextRequest) {
+export async function POST(request: NextRequest) {
+  const originFailure = enforceDashboardOrigin(request)
+  if (originFailure) {
+    return originFailure
+  }
+
   const authMode = getDashboardAuthMode()
   const response = NextResponse.json(
     { authenticated: authMode === "disabled", mode: authMode },
@@ -24,5 +31,6 @@ export async function POST(_request: NextRequest) {
     "",
     getDashboardSessionClearCookieOptions(),
   )
+  logDashboardAuthEvent("dashboard_logout", request)
   return response
 }

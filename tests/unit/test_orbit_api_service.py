@@ -122,6 +122,26 @@ def test_service_ingest_retrieve_feedback_and_status(tmp_path: Path) -> None:
         service.close()
 
 
+def test_service_metrics_include_http_status_and_dashboard_failures(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    try:
+        service.record_http_response(200)
+        service.record_http_response(401)
+        service.record_http_response(401)
+        service.record_dashboard_auth_failure()
+        service.record_dashboard_key_rotation_failure()
+
+        metrics = service.metrics_text()
+        assert 'orbit_http_responses_total{status_code="200"} 1' in metrics
+        assert 'orbit_http_responses_total{status_code="401"} 2' in metrics
+        assert "orbit_dashboard_auth_failures_total 1" in metrics
+        assert "orbit_dashboard_key_rotation_failures_total 1" in metrics
+    finally:
+        service.close()
+
+
 def test_service_feedback_missing_memory(tmp_path: Path) -> None:
     service = _service(tmp_path)
     try:

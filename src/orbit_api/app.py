@@ -122,6 +122,22 @@ def create_app(
 
     configure_telemetry(app, config)
 
+    @app.middleware("http")
+    async def observe_http_metrics(request: Request, call_next: Callable) -> Response:
+        service = _service_from_app(app)
+        try:
+            response = await call_next(request)
+        except Exception:  # pylint: disable=broad-exception-caught
+            service.record_http_response(500)
+            raise
+        service.record_http_response(response.status_code)
+        if (
+            request.url.path.startswith("/v1/dashboard")
+            and response.status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN)
+        ):
+            service.record_dashboard_auth_failure()
+        return response
+
     limit = limiter.limit
 
     def get_service() -> OrbitApiService:
@@ -590,15 +606,20 @@ def create_app(
                 actor_subject=_actor_subject(auth),
             )
         except KeyError as exc:
+            service.record_dashboard_key_rotation_failure()
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=str(exc),
             ) from exc
         except ValueError as exc:
+            service.record_dashboard_key_rotation_failure()
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=str(exc),
             ) from exc
+        except Exception:
+            service.record_dashboard_key_rotation_failure()
+            raise
         log.info(
             "rotate_api_key",
             account=auth.subject,

@@ -119,6 +119,8 @@ def test_api_end_to_end_flow(tmp_path: Path) -> None:
             metrics = await client.get("/v1/metrics")
             assert metrics.status_code == 200
             assert "orbit_ingest_requests_total" in metrics.text
+            assert 'orbit_http_responses_total{status_code="201"}' in metrics.text
+            assert 'orbit_http_responses_total{status_code="200"}' in metrics.text
 
     asyncio.run(_run())
 

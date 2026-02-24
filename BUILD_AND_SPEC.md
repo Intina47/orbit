@@ -1308,3 +1308,56 @@ Validation:
 - `cd front-end && npm run build`: PASS
 - `cd front-end && npx tsc --noEmit`: PASS
 - `cd front-end && npm run lint`: blocked (no ESLint flat config present in repo)
+
+### 2026-02-24 - Dashboard Auth Proxy Phase (OIDC + Tenant JWT Exchange + Alerts + E2E)
+
+Completed:
+- Added OIDC auth mode and callback flow for dashboard sessions:
+  - `front-end/app/api/dashboard/auth/oidc/start/route.ts`
+  - `front-end/app/api/dashboard/auth/oidc/callback/route.ts`
+  - `front-end/lib/dashboard-auth.ts` (OIDC discovery, token exchange, user claim resolution)
+- Implemented tenant-aware short-lived JWT exchange in proxy:
+  - `front-end/lib/dashboard-auth.ts`
+    - per-session principal -> short-lived Orbit JWT (`account_key` derived deterministically)
+    - configurable issuer/audience/ttl/algorithm
+  - `front-end/lib/orbit-dashboard-proxy.ts`
+    - route-level required scope propagation (`keys:read`/`keys:write`)
+- Added strict proxy hardening controls:
+  - CSRF-style origin checks on dashboard mutation routes
+  - password login throttling + lockout window
+  - structured auth/proxy audit logs (`dashboard_login_failure`, `dashboard_login_locked`, OIDC events, proxy action events)
+- Updated dashboard API routes to enforce new controls/scopes:
+  - `front-end/app/api/dashboard/keys/route.ts`
+  - `front-end/app/api/dashboard/keys/[keyId]/revoke/route.ts`
+  - `front-end/app/api/dashboard/keys/[keyId]/rotate/route.ts`
+  - `front-end/app/api/dashboard/auth/login/route.ts`
+  - `front-end/app/api/dashboard/auth/logout/route.ts`
+  - `front-end/app/api/dashboard/auth/session/route.ts`
+- Updated dashboard UI to support `password | oidc | disabled`:
+  - `front-end/components/orbit/dashboard-console.tsx`
+  - handles OIDC redirect path + auth callback error surface
+- Added Playwright E2E harness and key auth scenarios:
+  - `front-end/playwright.config.ts`
+  - `front-end/tests/e2e/dashboard-auth.spec.ts`
+- Added API-side metrics and alerting for hard runtime monitoring:
+  - `src/orbit_api/app.py` (HTTP status observation middleware + dashboard auth failure counting)
+  - `src/orbit_api/service.py` (new counters: HTTP status totals, dashboard auth failures, key-rotation failures)
+  - `deploy/prometheus/alerts-orbit.yml`
+  - `deploy/prometheus/prometheus.yml` (rule file loading)
+  - `docker-compose.yml` (alert rules mount)
+  - docs updates:
+    - `docs/deployment.md`
+    - `docs/index.md`
+    - `front-end/.env.example`
+    - `front-end/README.md`
+    - `front-end/app/docs/configuration/page.tsx`
+    - `front-end/app/docs/deployment/page.tsx`
+    - `front-end/app/docs/troubleshooting/page.tsx`
+
+Tests/validation:
+- `python -m pytest tests/unit/test_orbit_api_service.py tests/integration/test_orbit_api_integration.py -q`: PASS
+- `python -m ruff check src/orbit_api/app.py src/orbit_api/service.py tests/unit/test_orbit_api_service.py tests/integration/test_orbit_api_integration.py`: PASS
+- `cd front-end && npm run build`: PASS
+- `cd front-end && npx tsc --noEmit`: PASS
+- `cd front-end && npm run lint`: blocked (no ESLint flat config present in repo)
+- `cd front-end && npm install`: failed in current local environment due upstream npm dependency-tree issue (`Cannot read properties of null (reading 'edgesOut')`); app build/typecheck unaffected.
