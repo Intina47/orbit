@@ -16,11 +16,13 @@ COPY src /app/src
 COPY scripts/docker-entrypoint.sh /app/scripts/docker-entrypoint.sh
 
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir .
+    && python -m pip install --no-cache-dir \
+      --index-url https://download.pytorch.org/whl/cpu \
+      --extra-index-url https://pypi.org/simple \
+      .
 
 RUN chmod +x /app/scripts/docker-entrypoint.sh
 
 EXPOSE 8000
 
 ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]
-

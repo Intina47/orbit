@@ -1,0 +1,14 @@
+# Keep Cloud Build context minimal and deterministic.
+# Start by ignoring everything, then allow only files required by Dockerfile.
+**
+
+!Dockerfile
+!pyproject.toml
+!poetry.lock
+!README.md
+!BUILD_AND_SPEC.md
+!alembic.ini
+!migrations/**
+!src/**
+!scripts/
+!scripts/docker-entrypoint.sh
