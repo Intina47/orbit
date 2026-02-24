@@ -1,0 +1,149 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: #000000;
+  --foreground: #F5F5F5;
+  --card: #000000;
+  --card-foreground: #F5F5F5;
+  --popover: #000000;
+  --popover-foreground: #F5F5F5;
+  --primary: #00FF14;
+  --primary-foreground: #000000;
+  --secondary: #1A1A1A;
+  --secondary-foreground: #F5F5F5;
+  --muted: #1A1A1A;
+  --muted-foreground: #888888;
+  --accent: #00BB00;
+  --accent-foreground: #000000;
+  --destructive: #FF4444;
+  --destructive-foreground: #000000;
+  --border: #333333;
+  --input: #1A1A1A;
+  --ring: #00FF14;
+  --radius: 0px;
+}
+
+@theme inline {
+  --font-sans: 'Geist Mono', 'Geist Mono Fallback', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Courier, monospace;
+  --font-mono: 'Geist Mono', 'Geist Mono Fallback', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Courier, monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Blinking cursor animation */
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.cursor-blink {
+  animation: blink 1s step-end infinite;
+}
+
+/* Terminal glow effect */
+.text-glow {
+  text-shadow: 0 0 10px #00FF14, 0 0 20px #00FF1466;
+}
+
+.text-glow-sm {
+  text-shadow: 0 0 6px #00FF1488;
+}
+
+/* Scanline overlay */
+.scanlines {
+  position: relative;
+}
+.scanlines::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.05) 2px,
+    rgba(0, 0, 0, 0.05) 4px
+  );
+}
+
+/* Border draw animation */
+@keyframes draw-border-h {
+  from { width: 0; }
+  to { width: 100%; }
+}
+@keyframes draw-border-v {
+  from { height: 0; }
+  to { height: 100%; }
+}
+
+/* Fade-in up animation for scroll sections */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.6s ease-out forwards;
+}
+
+/* Progress bar fill animation */
+@keyframes fill-bar {
+  from { width: 0; }
+  to { width: var(--bar-width); }
+}
+
+.animate-fill-bar {
+  animation: fill-bar 1s ease-out forwards;
+}
+
+/* Type effect */
+@keyframes typing {
+  from { width: 0; }
+  to { width: 100%; }
+}
+
+/* Selection color */
+::selection {
+  background: #00FF14;
+  color: #000000;
+}
