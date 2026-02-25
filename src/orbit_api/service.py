@@ -1230,6 +1230,7 @@ class OrbitApiService:
         rank_score: float,
     ) -> Memory:
         inference_provenance = self._inference_provenance(record)
+        fact_inference = self._fact_inference_metadata(record)
         return Memory(
             memory_id=record.memory_id,
             content=record.content,
@@ -1244,6 +1245,7 @@ class OrbitApiService:
                 "relationships": record.relationships,
                 "storage_tier": record.storage_tier.value,
                 "inference_provenance": inference_provenance,
+                "fact_inference": fact_inference,
             },
             relevance_explanation=(
                 "Ranked by semantic similarity + learned relevance model."
@@ -1260,6 +1262,17 @@ class OrbitApiService:
         signature = cls._relationship_value(relationships, prefix="signature:")
         derived_from_ids = cls._relationship_values(relationships, prefix="derived_from:")
         supersedes_ids = cls._relationship_values(relationships, prefix="supersedes:")
+        conflicts_with_ids = cls._relationship_values(
+            relationships,
+            prefix="conflicts_with:",
+        )
+        clarification_required = (
+            cls._relationship_value(
+                relationships,
+                prefix="clarification_required:",
+            )
+            == "true"
+        )
 
         is_inferred = cls._is_inferred_memory_record(
             record=record,
@@ -1279,6 +1292,37 @@ class OrbitApiService:
             "signature": signature,
             "derived_from_memory_ids": derived_from_ids,
             "supersedes_memory_ids": supersedes_ids,
+            "conflicts_with_memory_ids": conflicts_with_ids,
+            "clarification_required": clarification_required,
+        }
+
+    @classmethod
+    def _fact_inference_metadata(cls, record: MemoryRecord) -> dict[str, Any] | None:
+        relationships = [str(item).strip() for item in record.relationships]
+        fact_key = cls._relationship_value(relationships, prefix="fact_key:")
+        if fact_key is None:
+            return None
+        return {
+            "subject": cls._relationship_value(relationships, prefix="fact_subject:"),
+            "fact_key": fact_key,
+            "fact_type": cls._relationship_value(relationships, prefix="fact_type:"),
+            "polarity": cls._relationship_value(relationships, prefix="fact_polarity:"),
+            "status": cls._relationship_value(relationships, prefix="fact_status:"),
+            "critical_fact": (
+                cls._relationship_value(relationships, prefix="critical_fact:")
+                == "true"
+            ),
+            "clarification_required": (
+                cls._relationship_value(
+                    relationships,
+                    prefix="clarification_required:",
+                )
+                == "true"
+            ),
+            "conflicts_with_memory_ids": cls._relationship_values(
+                relationships,
+                prefix="conflicts_with:",
+            ),
         }
 
     def _filter_candidates(
@@ -1945,6 +1989,8 @@ class OrbitApiService:
             "user_profile",
             "user_fact",
             "inferred_preference",
+            "inferred_user_fact",
+            "inferred_user_fact_conflict",
         }:
             return "profile"
         return "other"
@@ -2014,6 +2060,12 @@ class OrbitApiService:
             "feedback_preference_shift": (
                 "Feedback trends indicated a stable response-style preference."
             ),
+            "fact_extraction_v1": (
+                "Structured user facts were inferred from explicit natural-language statements."
+            ),
+            "fact_conflict_guard_v1": (
+                "Conflicting critical facts were detected; clarification is required before relying on them."
+            ),
         }
         if inference_type in reasons:
             return reasons[inference_type]
@@ -2022,6 +2074,10 @@ class OrbitApiService:
             return reasons["feedback_preference_shift"]
         if intent == "inferred_learning_pattern":
             return "Adaptive personalization inferred a recurring learning pattern."
+        if intent == "inferred_user_fact":
+            return reasons["fact_extraction_v1"]
+        if intent == "inferred_user_fact_conflict":
+            return reasons["fact_conflict_guard_v1"]
         if intent == "learning_progress" and record.content.strip().lower().startswith(
             "inferred progress:"
         ):

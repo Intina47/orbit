@@ -118,6 +118,27 @@ export default function ApiReferencePage() {
         ))}
       </div>
 
+      <h2 className="text-2xl font-bold text-foreground mb-4">Inference metadata in retrieval responses</h2>
+      <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+        For inferred facts and conflict guards, Orbit includes both provenance and normalized fact metadata in <code className="text-primary">memory.metadata</code>.
+      </p>
+      <div className="border border-border p-4 mb-12 bg-secondary/30">
+        <code className="text-xs text-foreground whitespace-pre-wrap block">{`metadata = {
+  "intent": "inferred_user_fact_conflict",
+  "inference_provenance": {
+    "inference_type": "fact_conflict_guard_v1",
+    "clarification_required": true,
+    "conflicts_with_memory_ids": ["<memory-id>"]
+  },
+  "fact_inference": {
+    "fact_key": "allergy:pineapple",
+    "fact_type": "constraint",
+    "status": "contested",
+    "clarification_required": true
+  }
+}`}</code>
+      </div>
+
       {/* Next */}
       <div className="border-t border-border pt-8">
         <p className="text-xs text-muted-foreground tracking-wider uppercase mb-2">Next</p>

@@ -42,6 +42,56 @@ export default function PersonalizationPage() {
         </div>
       </div>
 
+      <h2 className="text-2xl font-bold text-foreground mb-4">Fact inference + contradiction guard</h2>
+      <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+        Orbit now infers structured user facts from plain language (for example allergies or family preferences) and marks critical contradictions for clarification.
+      </p>
+      <CodeBlock
+        code={`# User statements
+orbit.ingest(content="I am allergic to pineapple.", event_type="user_question", entity_id="alice")
+orbit.ingest(content="I am not allergic to pineapple anymore.", event_type="user_question", entity_id="alice")
+
+results = orbit.retrieve(
+    query="What should I consider before suggesting recipes?",
+    entity_id="alice",
+    limit=10,
+)
+
+for memory in results.memories:
+    fact = memory.metadata.get("fact_inference")
+    provenance = memory.metadata.get("inference_provenance", {})
+    if fact:
+        print(fact["fact_key"], fact["status"], fact["clarification_required"])
+    if provenance.get("clarification_required"):
+        # safety-sensitive contradiction detected
+        print("Ask clarification before relying on this fact")`}
+        language="python"
+        filename="fact_inference_guard.py"
+      />
+
+      <CodeBlock
+        code={`{
+  "intent": "inferred_user_fact_conflict",
+  "fact_inference": {
+    "subject": "user",
+    "fact_key": "allergy:pineapple",
+    "fact_type": "constraint",
+    "polarity": null,
+    "status": "contested",
+    "critical_fact": true,
+    "clarification_required": true,
+    "conflicts_with_memory_ids": ["<memory-id>"]
+  },
+  "inference_provenance": {
+    "inference_type": "fact_conflict_guard_v1",
+    "clarification_required": true,
+    "conflicts_with_memory_ids": ["<memory-id>"]
+  }
+}`}
+        language="json"
+        filename="retrieve_payload_example.json"
+      />
+
       {/* Minimal integration */}
       <h2 className="text-2xl font-bold text-foreground mb-4">Minimal integration (FastAPI chatbot)</h2>
       <CodeBlock

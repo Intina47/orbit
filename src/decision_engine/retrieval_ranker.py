@@ -28,6 +28,8 @@ class RetrievalRanker:
         "user_question": 1.06,
         "inferred_learning_pattern": 1.26,
         "inferred_preference": 1.32,
+        "inferred_user_fact": 1.34,
+        "inferred_user_fact_conflict": 1.36,
         "assistant_response": 0.50,
         "assistant_message": 0.55,
     }

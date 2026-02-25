@@ -17,6 +17,15 @@ def _store_event(engine, event: Event) -> str:
     return stored.memory_id
 
 
+def _relation_value(memory, prefix: str) -> str | None:
+    for relation in memory.relationships:
+        if relation.startswith(prefix):
+            value = relation.removeprefix(prefix).strip()
+            if value:
+                return value
+    return None
+
+
 def test_repeated_questions_create_inferred_learning_pattern(engine) -> None:
     for idx in range(3):
         _store_event(
@@ -170,6 +179,146 @@ def test_negative_feedback_on_detailed_style_infers_concise_preference(engine) -
         if relation.startswith("derived_from:")
     ]
     assert len(derived) >= 1
+
+
+def test_fact_inference_extracts_allergy_constraint(engine) -> None:
+    source_id = _store_event(
+        engine,
+        Event(
+            timestamp=1_700_380_000,
+            entity_id="alice",
+            event_type="user_question",
+            description="I am allergic to pineapple and should avoid it.",
+            metadata={"intent": "user_question"},
+        ),
+    )
+
+    facts = [
+        item for item in engine.get_memory(entity_id="alice") if item.intent == "inferred_user_fact"
+    ]
+    assert len(facts) >= 1
+    allergy = facts[-1]
+    assert "allergic to pineapple" in allergy.content.lower()
+    assert _relation_value(allergy, "fact_subject:") == "user"
+    assert _relation_value(allergy, "fact_key:") == "allergy:pineapple"
+    assert _relation_value(allergy, "fact_polarity:") == "positive"
+    assert f"derived_from:{source_id}" in allergy.relationships
+
+
+def test_fact_inference_is_subject_aware(engine) -> None:
+    _store_event(
+        engine,
+        Event(
+            timestamp=1_700_390_000,
+            entity_id="alice",
+            event_type="user_question",
+            description="I am allergic to pineapple.",
+            metadata={"intent": "user_question"},
+        ),
+    )
+    _store_event(
+        engine,
+        Event(
+            timestamp=1_700_390_100,
+            entity_id="alice",
+            event_type="user_question",
+            description="My father is a big fan of pineapple pie.",
+            metadata={"intent": "user_question"},
+        ),
+    )
+
+    facts = [
+        item for item in engine.get_memory(entity_id="alice") if item.intent == "inferred_user_fact"
+    ]
+    subjects = {_relation_value(item, "fact_subject:") for item in facts}
+    assert "user" in subjects
+    assert "father" in subjects
+    conflicts = [
+        item
+        for item in engine.get_memory(entity_id="alice")
+        if item.intent == "inferred_user_fact_conflict"
+    ]
+    assert len(conflicts) == 0
+
+
+def test_contradicting_allergy_creates_conflict_guard(engine) -> None:
+    _store_event(
+        engine,
+        Event(
+            timestamp=1_700_395_000,
+            entity_id="alice",
+            event_type="user_question",
+            description="I am allergic to pineapple.",
+            metadata={"intent": "user_question"},
+        ),
+    )
+    _store_event(
+        engine,
+        Event(
+            timestamp=1_700_395_100,
+            entity_id="alice",
+            event_type="user_question",
+            description="I am not allergic to pineapple anymore.",
+            metadata={"intent": "user_question"},
+        ),
+    )
+
+    memories = engine.get_memory(entity_id="alice")
+    conflict_guards = [
+        item for item in memories if item.intent == "inferred_user_fact_conflict"
+    ]
+    assert len(conflict_guards) == 1
+    guard = conflict_guards[0]
+    assert "clarification" in guard.content.lower()
+    assert _relation_value(guard, "fact_key:") == "allergy:pineapple"
+    assert _relation_value(guard, "clarification_required:") == "true"
+
+    contested_facts = [
+        item
+        for item in memories
+        if item.intent == "inferred_user_fact"
+        and _relation_value(item, "fact_key:") == "allergy:pineapple"
+        and _relation_value(item, "fact_status:") == "contested"
+    ]
+    assert len(contested_facts) >= 1
+    assert any(
+        relation.startswith("conflicts_with:")
+        for relation in contested_facts[-1].relationships
+    )
+
+
+def test_confirmed_allergy_change_supersedes_old_fact(engine) -> None:
+    _store_event(
+        engine,
+        Event(
+            timestamp=1_700_396_000,
+            entity_id="alice",
+            event_type="user_question",
+            description="I am allergic to pineapple.",
+            metadata={"intent": "user_question"},
+        ),
+    )
+    _store_event(
+        engine,
+        Event(
+            timestamp=1_700_396_100,
+            entity_id="alice",
+            event_type="user_question",
+            description="Doctor confirmed I am not allergic to pineapple anymore.",
+            metadata={"intent": "user_question"},
+        ),
+    )
+
+    memories = engine.get_memory(entity_id="alice")
+    allergy_facts = [
+        item
+        for item in memories
+        if item.intent == "inferred_user_fact"
+        and _relation_value(item, "fact_key:") == "allergy:pineapple"
+    ]
+    assert len(allergy_facts) == 1
+    assert _relation_value(allergy_facts[0], "fact_polarity:") == "negative"
+    assert _relation_value(allergy_facts[0], "fact_status:") == "superseding"
 
 
 def test_failed_attempts_create_recurring_failure_inference(engine) -> None:

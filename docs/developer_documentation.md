@@ -270,7 +270,37 @@ Retrieve results include normalized inference provenance for debugging:
           "inference_type": "recurring_failure_pattern",
           "signature": "alice|recurring_failure_pattern|list indexing",
           "derived_from_memory_ids": ["mem_a", "mem_b"],
-          "supersedes_memory_ids": ["mem_old_1"]
+          "supersedes_memory_ids": ["mem_old_1"],
+          "conflicts_with_memory_ids": [],
+          "clarification_required": false
+        },
+        "fact_inference": null
+      }
+    },
+    {
+      "memory_id": "mem_456",
+      "metadata": {
+        "intent": "inferred_user_fact_conflict",
+        "inference_provenance": {
+          "is_inferred": true,
+          "why": "Conflicting critical facts were detected; clarification is required before relying on them.",
+          "when": "2026-02-25T16:00:00+00:00",
+          "inference_type": "fact_conflict_guard_v1",
+          "signature": "alice|fact_conflict_guard_v1|user|allergy:pineapple",
+          "derived_from_memory_ids": ["mem_new_statement"],
+          "supersedes_memory_ids": [],
+          "conflicts_with_memory_ids": ["mem_prior_fact"],
+          "clarification_required": true
+        },
+        "fact_inference": {
+          "subject": "user",
+          "fact_key": "allergy:pineapple",
+          "fact_type": "constraint",
+          "polarity": null,
+          "status": "contested",
+          "critical_fact": true,
+          "clarification_required": true,
+          "conflicts_with_memory_ids": ["mem_prior_fact"]
         }
       }
     }

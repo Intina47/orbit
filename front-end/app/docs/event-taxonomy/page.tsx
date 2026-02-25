@@ -64,6 +64,18 @@ export default function EventTaxonomyPage() {
             Generated from sustained feedback trends. Example: concise answers consistently receive higher helpfulness scores.
           </p>
         </div>
+        <div className="bg-background p-6">
+          <code className="text-primary text-sm font-bold">inferred_user_fact</code>
+          <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
+            Generated from explicit natural-language statements. Example: user constraint or family preference extracted into structured fact metadata.
+          </p>
+        </div>
+        <div className="bg-background p-6">
+          <code className="text-primary text-sm font-bold">inferred_user_fact_conflict</code>
+          <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
+            Generated when critical fact statements conflict. Orbit marks these as clarification-required before relying on them.
+          </p>
+        </div>
       </div>
 
       <div className="border border-primary/30 bg-primary/5 p-6 mb-12">

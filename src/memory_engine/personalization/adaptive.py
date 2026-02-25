@@ -41,6 +41,16 @@ class _SignatureReservation:
     supersedes_memory_ids: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class _FactSignal:
+    subject: str
+    fact_key: str
+    fact_type: str
+    polarity: str
+    value: str
+    critical: bool
+
+
 class AdaptivePersonalizationEngine:
     """Derive adaptive user-profile memories from repeated patterns and feedback."""
 
@@ -59,6 +69,72 @@ class AdaptivePersonalizationEngine:
         "user_attempt",
         "assessment_result",
         "learning_progress",
+    }
+    _FACT_SOURCE_INTENTS = {
+        "user_question",
+        "user_attempt",
+        "preference_stated",
+        "user_fact",
+        "learning_progress",
+    }
+    _CRITICAL_FACT_TYPES = {"constraint", "medical_constraint"}
+    _SUBJECT_ALIASES = {
+        "i": "user",
+        "i'm": "user",
+        "im": "user",
+        "me": "user",
+        "myself": "user",
+        "my father": "father",
+        "my dad": "father",
+        "my mother": "mother",
+        "my mom": "mother",
+        "my brother": "brother",
+        "my sister": "sister",
+        "my wife": "wife",
+        "my husband": "husband",
+        "my son": "son",
+        "my daughter": "daughter",
+        "my partner": "partner",
+        "my family": "family",
+    }
+    _ALLERGY_PATTERN = re.compile(
+        r"\b(?P<subject>i(?:'m)?|im|me|myself|my father|my dad|my mother|my mom|"
+        r"my brother|my sister|my wife|my husband|my son|my daughter|my partner|"
+        r"my family)\s+(?:am|are|is)?\s*(?P<neg>not\s+|no longer\s+)?allergic\s+to\s+"
+        r"(?P<item>[^.,;!?]+)",
+        flags=re.IGNORECASE,
+    )
+    _LIKES_PATTERN = re.compile(
+        r"\b(?P<subject>i(?:'m)?|im|me|myself|my father|my dad|my mother|my mom|"
+        r"my brother|my sister|my wife|my husband|my son|my daughter|my partner|"
+        r"my family)\s+(?:really\s+)?(?:like|likes|love|loves|enjoy|enjoys)\s+"
+        r"(?P<item>[^.,;!?]+)",
+        flags=re.IGNORECASE,
+    )
+    _FAN_OF_PATTERN = re.compile(
+        r"\b(?P<subject>my father|my dad|my mother|my mom|my brother|my sister|"
+        r"my wife|my husband|my son|my daughter|my partner|my family)\s+"
+        r"(?:is|are)\s+(?:a\s+)?(?:big\s+)?fan\s+of\s+(?P<item>[^.,;!?]+)",
+        flags=re.IGNORECASE,
+    )
+    _CONFIRMATION_TERMS = (
+        "doctor",
+        "confirmed",
+        "test result",
+        "tested",
+        "medical report",
+        "cleared",
+        "clinically",
+        "diagnosed",
+    )
+    _FACT_TRAILING_TERMS = {
+        "again",
+        "anymore",
+        "currently",
+        "now",
+        "still",
+        "today",
+        "yet",
     }
     _FAILURE_TERMS = {
         "bug",
@@ -137,6 +213,7 @@ class AdaptivePersonalizationEngine:
             self._TOPIC_CLUSTER_SOURCE_INTENTS
             | self._FAILURE_SOURCE_INTENTS
             | self._PROGRESS_SOURCE_INTENTS
+            | self._FACT_SOURCE_INTENTS
         ):
             return []
 
@@ -169,6 +246,14 @@ class AdaptivePersonalizationEngine:
             )
             if progress_candidate is not None:
                 candidates.append(progress_candidate)
+        if intent in self._FACT_SOURCE_INTENTS:
+            candidates.extend(
+                self._infer_fact_candidates(
+                    memory=memory,
+                    entity_id=entity_id,
+                    account_key=account_key,
+                )
+            )
         return candidates
 
     def _infer_repeat_topic_cluster(
@@ -431,6 +516,184 @@ class AdaptivePersonalizationEngine:
                 candidates.append(candidate)
                 emitted_for_entity.add(entity_id)
         return candidates
+
+    def _infer_fact_candidates(
+        self,
+        *,
+        memory: MemoryRecord,
+        entity_id: str,
+        account_key: str | None = None,
+    ) -> list[InferredMemoryCandidate]:
+        text = f"{memory.summary} {memory.content}".strip()
+        signals = self._extract_fact_signals(text=text)
+        if not signals:
+            return []
+
+        output: list[InferredMemoryCandidate] = []
+        for signal in signals:
+            signature_topic = f"{signal.subject}|{signal.fact_key}|{signal.polarity}"
+            reservation = self._reserve_signature(
+                entity_id=entity_id,
+                inference_type="fact_extraction_v1",
+                topic_summary=signature_topic,
+                account_key=account_key,
+            )
+            if reservation is None:
+                continue
+
+            existing = self._existing_fact_memories(
+                entity_id=entity_id,
+                subject=signal.subject,
+                fact_key=signal.fact_key,
+                account_key=account_key,
+            )
+            conflicting = [
+                item
+                for item in existing
+                if self._fact_polarity(item) not in {None, signal.polarity}
+            ]
+            conflict_ids = [item.memory_id for item in conflicting]
+
+            confirmed_change = bool(conflicting) and self._has_confirmation_signal(text)
+            supersedes = tuple(conflict_ids) if confirmed_change else ()
+            clarification_required = bool(
+                conflicting and signal.critical and not confirmed_change
+            )
+            if supersedes:
+                fact_status = "superseding"
+            elif clarification_required:
+                fact_status = "contested"
+            else:
+                fact_status = "active"
+
+            summary = self._fact_summary(entity_id=entity_id, signal=signal)
+            content = self._fact_content(
+                entity_id=entity_id,
+                signal=signal,
+                clarification_required=clarification_required,
+            )
+            relationships = [
+                f"{entity_id}->fact:{signal.fact_key}",
+                "inferred:true",
+                "inference_type:fact_extraction_v1",
+                f"signature:{reservation.signature}",
+                f"fact_subject:{signal.subject}",
+                f"fact_key:{signal.fact_key}",
+                f"fact_type:{signal.fact_type}",
+                f"fact_polarity:{signal.polarity}",
+                f"fact_status:{fact_status}",
+                f"clarification_required:{str(clarification_required).lower()}",
+                f"critical_fact:{str(signal.critical).lower()}",
+                f"derived_from:{memory.memory_id}",
+            ]
+            relationships.extend(f"conflicts_with:{memory_id}" for memory_id in conflict_ids)
+
+            confidence = 0.9 if signal.critical else 0.82
+            if clarification_required:
+                confidence = min(0.95, confidence + 0.03)
+            candidate = InferredMemoryCandidate(
+                entity_id=entity_id,
+                event_type="inferred_user_fact",
+                content=content,
+                summary=summary,
+                confidence=confidence,
+                metadata={
+                    "inferred": True,
+                    "intent": "inferred_user_fact",
+                    "summary": summary,
+                    "entities": [entity_id],
+                    "relationships": relationships,
+                    "inference_type": "fact_extraction_v1",
+                    "fact_subject": signal.subject,
+                    "fact_key": signal.fact_key,
+                    "fact_type": signal.fact_type,
+                    "fact_polarity": signal.polarity,
+                    "fact_status": fact_status,
+                    "clarification_required": clarification_required,
+                    "critical_fact": signal.critical,
+                    "conflicts_with_memory_ids": conflict_ids,
+                },
+                supersedes_memory_ids=supersedes,
+            )
+            output.append(candidate)
+
+            if clarification_required:
+                guard = self._build_fact_conflict_guard(
+                    entity_id=entity_id,
+                    signal=signal,
+                    conflict_ids=conflict_ids,
+                    source_memory_id=memory.memory_id,
+                    account_key=account_key,
+                )
+                if guard is not None:
+                    output.append(guard)
+
+        return output
+
+    def _build_fact_conflict_guard(
+        self,
+        *,
+        entity_id: str,
+        signal: _FactSignal,
+        conflict_ids: list[str],
+        source_memory_id: str,
+        account_key: str | None = None,
+    ) -> InferredMemoryCandidate | None:
+        reservation = self._reserve_signature(
+            entity_id=entity_id,
+            inference_type="fact_conflict_guard_v1",
+            topic_summary=f"{signal.subject}|{signal.fact_key}",
+            account_key=account_key,
+        )
+        if reservation is None:
+            return None
+        summary = (
+            f"Clarify conflicting {signal.fact_type.replace('_', ' ')} facts for "
+            f"{self._subject_label(entity_id=entity_id, subject=signal.subject)}"
+        )
+        content = (
+            f"Inferred conflict guard: conflicting statements detected for "
+            f"{self._subject_label(entity_id=entity_id, subject=signal.subject)} "
+            f"on {signal.value}. Ask a clarification question before relying on this "
+            "fact in safety-sensitive responses."
+        )
+        relationships = [
+            f"{entity_id}->fact_conflict:{signal.fact_key}",
+            "inferred:true",
+            "inference_type:fact_conflict_guard_v1",
+            f"signature:{reservation.signature}",
+            f"fact_subject:{signal.subject}",
+            f"fact_key:{signal.fact_key}",
+            f"fact_type:{signal.fact_type}",
+            "fact_status:contested",
+            "clarification_required:true",
+            f"critical_fact:{str(signal.critical).lower()}",
+            f"derived_from:{source_memory_id}",
+        ]
+        relationships.extend(f"conflicts_with:{memory_id}" for memory_id in conflict_ids)
+        return InferredMemoryCandidate(
+            entity_id=entity_id,
+            event_type="inferred_user_fact_conflict",
+            content=content,
+            summary=summary,
+            confidence=0.94,
+            metadata={
+                "inferred": True,
+                "intent": "inferred_user_fact_conflict",
+                "summary": summary,
+                "entities": [entity_id],
+                "relationships": relationships,
+                "inference_type": "fact_conflict_guard_v1",
+                "fact_subject": signal.subject,
+                "fact_key": signal.fact_key,
+                "fact_type": signal.fact_type,
+                "fact_status": "contested",
+                "clarification_required": True,
+                "critical_fact": signal.critical,
+                "conflicts_with_memory_ids": conflict_ids,
+            },
+            supersedes_memory_ids=reservation.supersedes_memory_ids,
+        )
 
     def _recent_entity_memories(
         self,
@@ -794,6 +1057,188 @@ class AdaptivePersonalizationEngine:
     def _signature(entity_id: str, inference_type: str, topic_summary: str) -> str:
         normalized_topic = re.sub(r"\s+", " ", topic_summary.strip().lower())
         return f"{entity_id}|{inference_type}|{normalized_topic}"
+
+    @classmethod
+    def _extract_fact_signals(cls, *, text: str) -> list[_FactSignal]:
+        normalized = text.strip()
+        if not normalized:
+            return []
+
+        extracted: list[_FactSignal] = []
+        seen: set[tuple[str, str, str]] = set()
+
+        for match in cls._ALLERGY_PATTERN.finditer(normalized):
+            subject = cls._normalize_subject(match.group("subject"))
+            item = cls._normalize_fact_value(match.group("item"))
+            if item is None:
+                continue
+            polarity = "negative" if match.group("neg") else "positive"
+            key = f"allergy:{item}"
+            signature = (subject, key, polarity)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            extracted.append(
+                _FactSignal(
+                    subject=subject,
+                    fact_key=key,
+                    fact_type="constraint",
+                    polarity=polarity,
+                    value=item,
+                    critical=True,
+                )
+            )
+
+        for pattern in (cls._LIKES_PATTERN, cls._FAN_OF_PATTERN):
+            for match in pattern.finditer(normalized):
+                subject = cls._normalize_subject(match.group("subject"))
+                item = cls._normalize_fact_value(match.group("item"))
+                if item is None:
+                    continue
+                key = f"preference_like:{item}"
+                signature = (subject, key, "positive")
+                if signature in seen:
+                    continue
+                seen.add(signature)
+                extracted.append(
+                    _FactSignal(
+                        subject=subject,
+                        fact_key=key,
+                        fact_type="preference",
+                        polarity="positive",
+                        value=item,
+                        critical=False,
+                    )
+                )
+
+        return extracted
+
+    def _existing_fact_memories(
+        self,
+        *,
+        entity_id: str,
+        subject: str,
+        fact_key: str,
+        account_key: str | None = None,
+    ) -> list[MemoryRecord]:
+        matches: list[MemoryRecord] = []
+        for memory in self._storage.list_memories(account_key=account_key):
+            if entity_id not in memory.entities:
+                continue
+            memory_subject = self._relationship_value(
+                memory.relationships,
+                prefix="fact_subject:",
+            )
+            memory_key = self._relationship_value(
+                memory.relationships,
+                prefix="fact_key:",
+            )
+            if memory_subject != subject or memory_key != fact_key:
+                continue
+            matches.append(memory)
+        return matches
+
+    @staticmethod
+    def _relationship_value(
+        relationships: list[str],
+        *,
+        prefix: str,
+    ) -> str | None:
+        for relation in relationships:
+            if not relation.startswith(prefix):
+                continue
+            value = relation.removeprefix(prefix).strip()
+            if value:
+                return value
+        return None
+
+    def _fact_summary(self, *, entity_id: str, signal: _FactSignal) -> str:
+        subject_label = self._subject_label(entity_id=entity_id, subject=signal.subject)
+        if signal.fact_key.startswith("allergy:"):
+            if signal.polarity == "negative":
+                return f"{subject_label} reports no current allergy to {signal.value}"
+            return f"{subject_label} is allergic to {signal.value}"
+        return f"{subject_label} likes {signal.value}"
+
+    def _fact_content(
+        self,
+        *,
+        entity_id: str,
+        signal: _FactSignal,
+        clarification_required: bool,
+    ) -> str:
+        subject_label = self._subject_label(entity_id=entity_id, subject=signal.subject)
+        if signal.fact_key.startswith("allergy:"):
+            if signal.polarity == "negative":
+                base = (
+                    f"Inferred user fact: {subject_label} reports no current allergy to "
+                    f"{signal.value}."
+                )
+            else:
+                base = f"Inferred user fact: {subject_label} is allergic to {signal.value}."
+        else:
+            base = f"Inferred user fact: {subject_label} likes {signal.value}."
+        if clarification_required:
+            return (
+                base
+                + " Conflicting statements exist for this fact. Ask a clarification "
+                "question before relying on it."
+            )
+        return base
+
+    @staticmethod
+    def _normalize_subject(raw: str) -> str:
+        normalized = " ".join(raw.lower().split())
+        return AdaptivePersonalizationEngine._SUBJECT_ALIASES.get(normalized, "user")
+
+    @staticmethod
+    def _normalize_fact_value(raw: str) -> str | None:
+        cleaned = " ".join(raw.lower().split())
+        cleaned = re.sub(r"[\"'`]", "", cleaned)
+        cleaned = re.sub(r"[^a-z0-9\s-]", "", cleaned)
+        cleaned = re.sub(
+            r"\b(?:and|but)\s+"
+            r"(?:i|it|this|that|we|you|he|she|they|should|must|need|cannot|"
+            r"cant|have|has|had|will|would|could|can)\b.*$",
+            "",
+            cleaned,
+        ).strip()
+        cleaned = re.sub(r"\b(?:because|since)\b.*$", "", cleaned).strip()
+        cleaned = re.sub(
+            r"^(a|an|the|some|any|my)\s+",
+            "",
+            cleaned,
+        ).strip()
+        if not cleaned:
+            return None
+        tokens = [token for token in cleaned.split() if token]
+        if not tokens:
+            return None
+        while tokens and tokens[-1] in AdaptivePersonalizationEngine._FACT_TRAILING_TERMS:
+            tokens.pop()
+        if not tokens:
+            return None
+        value = " ".join(tokens[:4])
+        if len(value) < 2:
+            return None
+        return value
+
+    def _subject_label(self, *, entity_id: str, subject: str) -> str:
+        if subject == "user":
+            return entity_id
+        return f"{entity_id}'s {subject}"
+
+    @staticmethod
+    def _fact_polarity(memory: MemoryRecord) -> str | None:
+        return AdaptivePersonalizationEngine._relationship_value(
+            memory.relationships,
+            prefix="fact_polarity:",
+        )
+
+    @classmethod
+    def _has_confirmation_signal(cls, text: str) -> bool:
+        normalized = text.lower()
+        return any(term in normalized for term in cls._CONFIRMATION_TERMS)
 
     @classmethod
     def _is_failure_signal(cls, memory: MemoryRecord) -> bool:

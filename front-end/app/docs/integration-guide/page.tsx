@@ -99,6 +99,7 @@ if results.memories:
           "Ingest assistant responses, not only user prompts.",
           "Keep event types semantically consistent across services.",
           "Use feedback for both good and bad outcomes.",
+          "When metadata.inference_provenance.clarification_required is true, ask a clarification question before using that memory in safety-sensitive responses.",
           "Inspect inference provenance metadata during QA and incident review.",
         ].map((tip, i) => (
           <div key={i} className="flex items-start gap-3">

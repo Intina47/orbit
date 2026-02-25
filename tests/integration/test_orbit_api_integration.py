@@ -162,6 +162,70 @@ def test_async_sdk_against_fastapi_app(tmp_path: Path) -> None:
     asyncio.run(_run())
 
 
+def test_api_exposes_fact_inference_and_conflict_metadata(tmp_path: Path) -> None:
+    async def _run() -> None:
+        app = _build_app(tmp_path)
+        transport = httpx.ASGITransport(app=app)
+        headers = {"Authorization": f"Bearer {_jwt_token()}"}
+
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            first = await client.post(
+                "/v1/ingest",
+                headers=headers,
+                json={
+                    "content": "I am allergic to pineapple.",
+                    "event_type": "user_question",
+                    "entity_id": "alice",
+                },
+            )
+            assert first.status_code == 201
+
+            second = await client.post(
+                "/v1/ingest",
+                headers=headers,
+                json={
+                    "content": "I am not allergic to pineapple anymore.",
+                    "event_type": "user_question",
+                    "entity_id": "alice",
+                },
+            )
+            assert second.status_code == 201
+
+            listed = await client.get(
+                "/v1/memories",
+                headers=headers,
+                params={"limit": 50},
+            )
+            assert listed.status_code == 200
+            data = listed.json()["data"]
+            allergy_facts = [
+                item
+                for item in data
+                if (item["metadata"].get("fact_inference") or {}).get("fact_key")
+                == "allergy:pineapple"
+            ]
+            assert len(allergy_facts) >= 2
+
+            conflict_guards = [
+                item
+                for item in data
+                if item["metadata"].get("intent") == "inferred_user_fact_conflict"
+            ]
+            assert len(conflict_guards) >= 1
+            guard = conflict_guards[0]
+            provenance = guard["metadata"]["inference_provenance"]
+            assert provenance["clarification_required"] is True
+            assert len(provenance["conflicts_with_memory_ids"]) >= 1
+            assert (
+                guard["metadata"]["fact_inference"]["clarification_required"] is True
+            )
+
+    asyncio.run(_run())
+
+
 def test_api_enforces_cross_tenant_memory_isolation(tmp_path: Path) -> None:
     async def _run() -> None:
         app = _build_app(tmp_path)
