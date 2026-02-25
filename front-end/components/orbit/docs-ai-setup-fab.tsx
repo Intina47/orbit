@@ -31,6 +31,7 @@ const orbitWebsiteUrl = "https://orbit-memory.vercel.app"
 const orbitDocsUrl = "https://orbit-memory.vercel.app/docs"
 const orbitGithubRepoUrl = "https://github.com/intina47/orbit"
 const orbitGithubExamplesBaseUrl = "https://github.com/intina47/orbit/tree/main/examples"
+const orbitMetadataDocUrl = `${orbitDocsUrl}/metadata`
 
 export function DocsAiSetupFab() {
   const [open, setOpen] = useState(false)
@@ -206,12 +207,13 @@ function buildPrompt({
   language: LanguageTarget
   appType: AppTarget
 }): string {
-  const productContext = [
-    "Orbit is memory infrastructure for developer-facing AI products.",
-    "Goal: persist user-relevant signals and retrieve focused context with ingest -> retrieve -> feedback.",
-    "Official docs: https://orbit-memory.vercel.app/docs",
-    "Official repository: https://github.com/intina47/orbit",
-  ]
+const productContext = [
+  "Orbit is memory infrastructure for developer-facing AI products.",
+  "Goal: persist user-relevant signals and retrieve focused context with ingest -> retrieve -> feedback.",
+  "Official docs: https://orbit-memory.vercel.app/docs",
+  "Official repository: https://github.com/intina47/orbit",
+  "Monitor `/v1/status` metadata_summary for contested facts, conflict guards, and average fact age.",
+]
 
   const routeInstructions =
     setupRoute === "cloud"
@@ -252,6 +254,7 @@ function buildPrompt({
     "Keep entity_id stable per user.",
     "Feedback must attach to a retrieved memory_id; do not send entity-level score-only feedback.",
     "Use clear error handling for 401/403/429 and network failures.",
+    "Highlight the `/v1/status` metadata_summary counts (contested vs confirmed facts) so the dashboard card mirrors your prompt.",
   ]
 
   const outputRequirements = [
@@ -271,6 +274,7 @@ function buildPrompt({
     `${orbitDocsUrl}/installation`,
     `${orbitDocsUrl}/rest-endpoints`,
     `${orbitDocsUrl}/examples`,
+    `${orbitMetadataDocUrl}`,
   ]
 
   const targetHint =

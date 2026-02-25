@@ -108,11 +108,20 @@ export default function MetadataPage() {
       <section className="border-t border-border pt-8">
         <p className="text-xs text-muted-foreground tracking-[0.3em] uppercase mb-3">Need to keep shipping?</p>
         <p className="text-sm text-muted-foreground mb-3">
-          Link to the Quickstart, Installation, and Integration Guide from this page so every doc can reference this metadata at a glance.
+          Sprinkle this metadata blueprint into the{" "}
+          <Link href="/docs/quickstart" className="text-primary hover:underline">
+            Quickstart
+          </Link>
+          ,{" "}
+          <Link href="/docs/installation" className="text-primary hover:underline">
+            Installation guide
+          </Link>
+          , and{" "}
+          <Link href="/docs/integration-guide" className="text-primary hover:underline">
+            Integration Guide
+          </Link>{" "}
+          so every doc shares the same terminology.
         </p>
-        <Link href="/docs/quickstart" className="text-primary font-semibold hover:underline">
-          Quickstart {"->"}
-        </Link>
       </section>
     </div>
   )

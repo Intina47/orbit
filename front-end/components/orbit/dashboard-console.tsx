@@ -39,6 +39,7 @@ import {
   OrbitDashboardApiError,
   OrbitDashboardClient,
   OrbitDashboardSessionResponse,
+  OrbitMetadataSummary,
   OrbitStatusResponse,
 } from "@/lib/orbit-dashboard"
 
@@ -61,6 +62,7 @@ export function DashboardConsole() {
 
   const [keys, setKeys] = useState<OrbitApiKeySummary[]>([])
   const [accountStatus, setAccountStatus] = useState<OrbitStatusResponse | null>(null)
+  const [metadataSummary, setMetadataSummary] = useState<OrbitMetadataSummary | null>(null)
   const [metricsText, setMetricsText] = useState("")
   const [loadingMetrics, setLoadingMetrics] = useState(false)
   const [metricsError, setMetricsError] = useState<string | null>(null)
@@ -136,6 +138,7 @@ export function DashboardConsole() {
   useEffect(() => {
     if (authState !== "signed_in") {
       setAccountStatus(null)
+      setMetadataSummary(null)
       setLoadingStatus(false)
       setStatusError(null)
       return
@@ -151,6 +154,7 @@ export function DashboardConsole() {
           return
         }
         setAccountStatus(response)
+        setMetadataSummary(response.metadata_summary ?? null)
       } catch (error) {
         if (isCancelled) {
           return
@@ -547,6 +551,7 @@ export function DashboardConsole() {
   const isAuthenticated = authState === "signed_in"
   const usageSummary = accountStatus ? deriveUsageSummary(accountStatus, keys) : null
   const usageAlerts = usageSummary ? buildUsageAlerts(usageSummary) : []
+  const metadataAlerts = metadataSummary ? buildMetadataAlerts(metadataSummary) : []
   const metricsSnapshot = useMemo(
     () => parsePrometheusMetrics(metricsText),
     [metricsText],
@@ -749,6 +754,78 @@ export function DashboardConsole() {
                 ))}
               </>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {isAuthenticated && metadataSummary && (
+        <Card id="metadata-breakdown">
+          <CardHeader>
+            <CardTitle>Memory metadata</CardTitle>
+            <CardDescription>
+              Fact inference counts from <code className="text-primary">/v1/status</code> metadata_summary.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {metadataAlerts.map((alert) => (
+              <div
+                key={alert.id}
+                className={`border p-3 text-sm ${
+                  alert.tone === "warning"
+                    ? "border-amber-500/40 bg-amber-500/10 text-amber-700"
+                    : alert.tone === "critical"
+                      ? "border-destructive/40 bg-destructive/10 text-destructive"
+                      : "border-primary/30 bg-primary/5 text-foreground"
+                }`}
+              >
+                <div className="font-medium">{alert.title}</div>
+                <div className="mt-1 text-xs opacity-90">{alert.body}</div>
+              </div>
+            ))}
+            <div className="grid grid-cols-2 gap-3 text-xs text-muted-foreground md:grid-cols-4">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.3em]">Inferred facts</div>
+                <div className="text-lg font-semibold text-foreground">
+                  {formatCount(metadataSummary.total_inferred_facts)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.3em]">Confirmed</div>
+                <div className="text-lg font-semibold text-foreground">
+                  {formatCount(metadataSummary.confirmed_facts)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.3em]">Contested</div>
+                <div className="text-lg font-semibold text-foreground">
+                  {formatCount(metadataSummary.contested_facts)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.3em]">Conflict guards</div>
+                <div className="text-lg font-semibold text-foreground">
+                  {formatCount(metadataSummary.conflict_guards)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.3em]">Contested ratio</div>
+                <div className="text-lg font-semibold text-foreground">
+                  {formatPercent(metadataSummary.contested_ratio)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.3em]">Guard ratio</div>
+                <div className="text-lg font-semibold text-foreground">
+                  {formatPercent(metadataSummary.conflict_guard_ratio)}
+                </div>
+              </div>
+              <div className="md:col-span-2">
+                <div className="text-[11px] uppercase tracking-[0.3em]">Avg fact age</div>
+                <div className="text-lg font-semibold text-foreground">
+                  {metadataSummary.average_fact_age_days.toFixed(1)} days
+                </div>
+              </div>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -1212,6 +1289,13 @@ type UsageAlert = {
   body: string
 }
 
+type MetadataAlert = {
+  id: string
+  tone: "info" | "warning" | "critical"
+  title: string
+  body: string
+}
+
 function deriveUsageSummary(
   status: OrbitStatusResponse,
   keys: OrbitApiKeySummary[],
@@ -1278,6 +1362,43 @@ function buildUsageAlerts(summary: UsageSummary): UsageAlert[] {
       tone: "limit",
       title: "API key limit reached",
       body: `This plan includes up to ${formatCount(summary.apiKeyLimit)} API keys. Revoke an unused key or request Pilot Pro.`,
+    })
+  }
+  return alerts
+}
+
+function buildMetadataAlerts(summary: OrbitMetadataSummary): MetadataAlert[] {
+  const alerts: MetadataAlert[] = []
+  if (summary.total_inferred_facts === 0) {
+    alerts.push({
+      id: "metadata-none",
+      tone: "info",
+      title: "No inferred facts yet",
+      body: "Interact with Orbit a few times so metadata_summary can start ranking contested vs confirmed facts.",
+    })
+    return alerts
+  }
+  if (summary.contested_ratio >= 0.3) {
+    alerts.push({
+      id: "metadata-contested-high",
+      tone: "warning",
+      title: "Contested facts are rising",
+      body: `Approximately ${formatPercent(summary.contested_ratio)} of inferred facts need clarification. Ask follow-up questions to confirm states.`,
+    })
+  } else if (summary.contested_ratio <= 0.05) {
+    alerts.push({
+      id: "metadata-contested-low",
+      tone: "info",
+      title: "Low contested rate",
+      body: "Most inferred facts are confirmed—keep the same flows to maintain clarity.",
+    })
+  }
+  if (summary.conflict_guards > 0) {
+    alerts.push({
+      id: "metadata-conflict-guards",
+      tone: "info",
+      title: "Conflict guards detected",
+      body: `${formatCount(summary.conflict_guards)} guards flagged to avoid mistaken memories. Ask clarifying questions when they appear.`,
     })
   }
   return alerts
@@ -1402,6 +1523,11 @@ function formatDurationSeconds(value: number): string {
     return `${hours}h ${minutes}m`
   }
   return `${minutes}m`
+}
+
+function formatPercent(value: number): string {
+  const normalized = Math.round(value * 100)
+  return `${normalized}%`
 }
 
 function uniqueScopes(scopes: string[]): string[] {

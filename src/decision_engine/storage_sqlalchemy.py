@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import numpy as np
 from numpy.typing import NDArray
-from sqlalchemy import create_engine, delete, func, inspect, select, text, update
+from sqlalchemy import create_engine, delete, desc, func, inspect, select, text, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
@@ -148,6 +148,22 @@ class SQLAlchemyStorageManager:
             if account_key is not None:
                 normalized_account_key = self._normalize_account_key(account_key)
                 stmt = stmt.where(MemoryRow.account_key == normalized_account_key)
+            if limit is not None:
+                stmt = stmt.limit(limit)
+            rows = session.scalars(stmt).all()
+        return [self._row_to_memory(row) for row in rows]
+
+    def list_recent_memories(
+        self,
+        limit: int | None = None,
+        account_key: str | None = None,
+    ) -> list[MemoryRecord]:
+        with self._session_factory() as session:
+            stmt = select(MemoryRow)
+            if account_key is not None:
+                normalized_account_key = self._normalize_account_key(account_key)
+                stmt = stmt.where(MemoryRow.account_key == normalized_account_key)
+            stmt = stmt.order_by(desc(MemoryRow.created_at))
             if limit is not None:
                 stmt = stmt.limit(limit)
             rows = session.scalars(stmt).all()

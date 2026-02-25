@@ -215,6 +215,26 @@ class SQLiteStorageManager:
             rows = cursor.fetchall()
         return [self._row_to_memory(row) for row in rows]
 
+    def list_recent_memories(
+        self,
+        limit: int | None = None,
+        account_key: str | None = None,
+    ) -> list[MemoryRecord]:
+        with self._lock:
+            query_parts = ["SELECT * FROM memories"]
+            params: list[object] = []
+            if account_key is not None:
+                normalized_account_key = self._normalize_account_key(account_key)
+                query_parts.append("WHERE account_key = ?")
+                params.append(normalized_account_key)
+            query_parts.append("ORDER BY created_at DESC")
+            if limit is not None:
+                query_parts.append("LIMIT ?")
+                params.append(limit)
+            cursor = self._connection.execute(" ".join(query_parts), tuple(params))
+            rows = cursor.fetchall()
+        return [self._row_to_memory(row) for row in rows]
+
     def fetch_by_ids(
         self,
         memory_ids: list[str],

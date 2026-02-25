@@ -122,6 +122,16 @@ class AccountUsage(OrbitModel):
     quota: AccountQuota
 
 
+class MetadataSummary(OrbitModel):
+    total_inferred_facts: int
+    confirmed_facts: int
+    contested_facts: int
+    conflict_guards: int
+    contested_ratio: float
+    conflict_guard_ratio: float
+    average_fact_age_days: float
+
+
 class PilotProRequest(OrbitModel):
     requested: bool
     status: str
@@ -138,6 +148,7 @@ class StatusResponse(OrbitModel):
     pilot_pro_request: PilotProRequest | None = None
     latest_ingestion: datetime | None = None
     uptime_percent: float
+    metadata_summary: MetadataSummary
 
 
 class RetrieveRequest(OrbitModel):

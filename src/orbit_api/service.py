@@ -49,6 +49,7 @@ from orbit.models import (
     IngestRequest,
     IngestResponse,
     Memory,
+    MetadataSummary,
     PaginatedMemoriesResponse,
     PilotProRequest,
     PilotProRequestResponse,
@@ -960,6 +961,8 @@ class OrbitApiService:
             row=pilot_pro_request_row,
             policy=policy,
         )
+        metadata_summary = self._metadata_summary(normalized_account_key)
+
         return StatusResponse(
             connected=True,
             api_version=self._config.api_version,
@@ -987,6 +990,59 @@ class OrbitApiService:
             pilot_pro_request=pilot_pro_request,
             latest_ingestion=latest_ingestion,
             uptime_percent=self._config.uptime_percent,
+            metadata_summary=metadata_summary,
+        )
+
+    def _metadata_summary(self, account_key: str) -> MetadataSummary:
+        limit = max(1, self._config.metadata_summary_window)
+        records = self._engine.storage.list_recent_memories(
+            limit=limit,
+            account_key=account_key,
+        )
+        now = datetime.now(UTC)
+        total = 0
+        contested = 0
+        conflict_guards = 0
+        confirmed = 0
+        total_age_days = 0.0
+        for record in records:
+            relationships = [str(item).strip() for item in record.relationships]
+            inference_type = self._memory_inference_type(record)
+            if not self._is_inferred_memory_record(
+                record=record,
+                relationships=relationships,
+                inference_type=inference_type,
+            ):
+                continue
+            intent = record.intent.strip().lower()
+            if intent not in {"inferred_user_fact", "inferred_user_fact_conflict"}:
+                continue
+            total += 1
+            age_days = max((now - record.created_at).total_seconds() / 86400.0, 0.0)
+            total_age_days += age_days
+            if intent == "inferred_user_fact_conflict":
+                conflict_guards += 1
+                contested += 1
+                continue
+            fact_status = self._relationship_value(relationships, prefix="fact_status:") or ""
+            clarification_required = (
+                self._relationship_value(relationships, prefix="clarification_required:") == "true"
+            )
+            if fact_status == "contested" or clarification_required:
+                contested += 1
+            else:
+                confirmed += 1
+        average_age = (total_age_days / total) if total else 0.0
+        contested_ratio = (contested / total) if total else 0.0
+        conflict_guard_ratio = (conflict_guards / total) if total else 0.0
+        return MetadataSummary(
+            total_inferred_facts=total,
+            confirmed_facts=confirmed,
+            contested_facts=contested,
+            conflict_guards=conflict_guards,
+            contested_ratio=contested_ratio,
+            conflict_guard_ratio=conflict_guard_ratio,
+            average_fact_age_days=average_age,
         )
 
     def request_pilot_pro(

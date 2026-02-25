@@ -29,6 +29,13 @@ class StorageManagerProtocol(Protocol):
     ) -> list[MemoryRecord]:
         """Return all memories, optionally capped by limit."""
 
+    def list_recent_memories(
+        self,
+        limit: int | None = None,
+        account_key: str | None = None,
+    ) -> list[MemoryRecord]:
+        """Return the most recently created memories, capped by `limit`."""
+
     def fetch_by_ids(
         self,
         memory_ids: list[str],

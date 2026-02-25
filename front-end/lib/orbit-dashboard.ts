@@ -63,6 +63,16 @@ export type OrbitPilotProRequest = {
   email_sent_at?: string | null
 }
 
+export type OrbitMetadataSummary = {
+  total_inferred_facts: number
+  confirmed_facts: number
+  contested_facts: number
+  conflict_guards: number
+  contested_ratio: number
+  conflict_guard_ratio: number
+  average_fact_age_days: number
+}
+
 export type OrbitStatusResponse = {
   connected: boolean
   api_version: string
@@ -76,6 +86,7 @@ export type OrbitStatusResponse = {
   pilot_pro_request?: OrbitPilotProRequest | null
   latest_ingestion?: string | null
   uptime_percent: number
+  metadata_summary: OrbitMetadataSummary
 }
 
 export type OrbitPilotProRequestResponse = {

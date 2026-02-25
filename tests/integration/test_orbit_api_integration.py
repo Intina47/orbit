@@ -226,6 +226,46 @@ def test_api_exposes_fact_inference_and_conflict_metadata(tmp_path: Path) -> Non
     asyncio.run(_run())
 
 
+def test_status_metadata_summary_reflects_user_fact_conflicts(tmp_path: Path) -> None:
+    async def _run() -> None:
+        app = _build_app(tmp_path)
+        transport = httpx.ASGITransport(app=app)
+        headers = {"Authorization": f"Bearer {_jwt_token()}"}
+
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            await client.post(
+                "/v1/ingest",
+                headers=headers,
+                json={
+                    "content": "I am allergic to pineapple.",
+                    "event_type": "user_question",
+                    "entity_id": "alice",
+                },
+            )
+            await client.post(
+                "/v1/ingest",
+                headers=headers,
+                json={
+                    "content": "I am not allergic to pineapple anymore.",
+                    "event_type": "user_question",
+                    "entity_id": "alice",
+                },
+            )
+
+            status = await client.get("/v1/status", headers=headers)
+            assert status.status_code == 200
+            summary = status.json()["metadata_summary"]
+            assert summary["total_inferred_facts"] >= 2
+            assert summary["contested_facts"] >= 1
+            assert summary["conflict_guards"] >= 1
+            assert summary["contested_ratio"] > 0.0
+
+    asyncio.run(_run())
+
+
 def test_api_enforces_cross_tenant_memory_isolation(tmp_path: Path) -> None:
     async def _run() -> None:
         app = _build_app(tmp_path)

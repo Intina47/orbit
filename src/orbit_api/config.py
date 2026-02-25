@@ -43,6 +43,7 @@ class ApiConfig(BaseModel):
     pilot_pro_request_admin_email: str | None = None
     pilot_pro_request_from_email: str = "Orbit <onboarding@resend.dev>"
     pilot_pro_email_timeout_seconds: float = 10.0
+    metadata_summary_window: int = 400
 
     jwt_secret: str = "orbit-dev-secret-change-me"
     jwt_algorithm: str = "HS256"
@@ -109,6 +110,7 @@ class ApiConfig(BaseModel):
         "max_ingest_content_chars",
         "max_query_chars",
         "max_batch_items",
+        "metadata_summary_window",
     )
     @classmethod
     def validate_positive_limits(cls, value: int) -> int:
@@ -288,6 +290,7 @@ class ApiConfig(BaseModel):
             otel_service_name=os.getenv("ORBIT_OTEL_SERVICE_NAME", "orbit-api"),
             otel_exporter_endpoint=_env_optional("ORBIT_OTEL_EXPORTER_ENDPOINT"),
             cors_allow_origins=_env_csv("ORBIT_CORS_ALLOW_ORIGINS"),
+            metadata_summary_window=_env_int("ORBIT_METADATA_SUMMARY_WINDOW", 400),
         )
 
 
