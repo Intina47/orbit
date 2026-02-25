@@ -39,7 +39,6 @@ import {
   OrbitDashboardApiError,
   OrbitDashboardClient,
   OrbitDashboardSessionResponse,
-  getOrbitApiBaseUrl,
 } from "@/lib/orbit-dashboard"
 
 const PAGE_SIZE = 10
@@ -48,7 +47,6 @@ type AuthState = "checking" | "signed_out" | "signed_in"
 type OidcLoginProvider = NonNullable<OrbitDashboardSessionResponse["oidc_login_providers"]>[number]
 
 export function DashboardConsole() {
-  const apiBaseUrl = getOrbitApiBaseUrl()
   const client = useMemo(() => new OrbitDashboardClient(), [])
 
   const [authState, setAuthState] = useState<AuthState>("checking")
@@ -428,8 +426,7 @@ export function DashboardConsole() {
         <CardHeader>
           <CardTitle>Connection</CardTitle>
           <CardDescription>
-            Browser requests go to <code className="text-primary">/api/dashboard/*</code>. The server proxy exchanges your dashboard session for short-lived Orbit JWTs and forwards to{" "}
-            <code className="text-primary">{apiBaseUrl}</code>.
+            Browser requests use <code className="text-primary">/api/dashboard/*</code> server routes. Authentication and upstream API access are handled server-side.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -453,9 +450,7 @@ export function DashboardConsole() {
             No Orbit Bearer token is stored in localStorage or exposed to client-side JavaScript.
           </p>
           <p className="text-xs text-muted-foreground">
-            Required server envs: <code className="text-primary">ORBIT_DASHBOARD_SESSION_SECRET</code>,{" "}
-            <code className="text-primary">ORBIT_DASHBOARD_ORBIT_JWT_SECRET</code>, and auth mode variables
-            (<code className="text-primary">ORBIT_DASHBOARD_AUTH_MODE</code> + password or OIDC config).
+            Security-sensitive configuration remains server-only and is never sent to the browser.
           </p>
         </CardContent>
       </Card>
