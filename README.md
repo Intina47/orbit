@@ -115,6 +115,7 @@ curl -X POST http://localhost:8000/v1/ingest \
 | --- | --- | --- |
 | Python SDK | Python apps wanting fastest integration | `from orbit import MemoryEngine` |
 | REST API | Non-Python or service-to-service integration | `POST /v1/ingest`, `GET /v1/retrieve`, `POST /v1/feedback` |
+| Node.js (no SDK) | JavaScript apps using direct HTTP + API keys | `examples/nodejs_orbit_api_chatbot/` |
 | OpenClaw plugin | Agent workflows in OpenClaw | `integrations/openclaw-memory/` |
 
 ## Core Concepts
@@ -206,6 +207,8 @@ Response headers include:
 ## Examples
 
 - Live Orbit + Ollama chatbot: `examples/live_chatbot_ollama/`
+- Node.js API-key chatbot (no SDK): `examples/nodejs_orbit_api_chatbot/`
+- Polyglot direct API clients (Node/Python/Go): `examples/http_api_clients/`
 - OpenClaw memory plugin scaffold: `integrations/openclaw-memory/`
 - API + deployment runbook: `docs/DEPLOY_RENDER_VERCEL.md`
 - GCP Cloud Run deployment runbook: `docs/DEPLOY_GCP_CLOUD_RUN.md`

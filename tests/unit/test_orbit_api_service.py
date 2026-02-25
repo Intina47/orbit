@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from decision_engine.models import MemoryRecord, RetrievedMemory, StorageTier
 from memory_engine.config import EngineConfig
-from memory_engine.storage.db import ApiDashboardUserRow
+from memory_engine.storage.db import ApiDashboardUserRow, ApiPilotProRequestRow
 from orbit.models import FeedbackRequest, IngestRequest, RetrieveRequest
 from orbit_api.auth import AuthContext
 from orbit_api.config import ApiConfig
@@ -120,6 +120,9 @@ def test_service_ingest_retrieve_feedback_and_status(tmp_path: Path) -> None:
         assert status.account_usage.quota.plan == "free"
         assert status.account_usage.quota.events_per_month == 2
         assert status.account_usage.quota.queries_per_month == 2
+        assert status.pilot_pro_request is not None
+        assert status.pilot_pro_request.requested is False
+        assert status.pilot_pro_request.status == "not_requested"
 
         paged = service.list_memories(limit=10, cursor=None)
         assert paged.data
@@ -127,6 +130,52 @@ def test_service_ingest_retrieve_feedback_and_status(tmp_path: Path) -> None:
 
         metrics = service.metrics_text()
         assert "orbit_ingest_requests_total" in metrics
+    finally:
+        service.close()
+
+
+def test_service_request_pilot_pro_persists_and_is_idempotent(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        first = service.request_pilot_pro(
+            account_key="acct_pilot_request",
+            actor_subject="oidc:user_1",
+            actor_email="DevUser@Example.com",
+            actor_name="Dev User",
+        )
+        assert first.created is True
+        assert first.request.requested is True
+        assert first.request.status == "requested"
+        assert first.request.requested_by_email == "devuser@example.com"
+        assert first.request.requested_by_name == "Dev User"
+        assert first.email_sent is False
+
+        second = service.request_pilot_pro(
+            account_key="acct_pilot_request",
+            actor_subject="oidc:user_1",
+            actor_email="DevUser@Example.com",
+            actor_name="Dev User",
+        )
+        assert second.created is False
+        assert second.request.requested is True
+        assert second.request.status == "requested"
+
+        status = service.status("acct_pilot_request")
+        assert status.pilot_pro_request is not None
+        assert status.pilot_pro_request.requested is True
+        assert status.pilot_pro_request.status == "requested"
+        assert status.pilot_pro_request.requested_by_email == "devuser@example.com"
+
+        engine = create_engine(service.config.database_url, future=True)
+        try:
+            with Session(engine) as session:
+                stmt = select(ApiPilotProRequestRow).where(
+                    ApiPilotProRequestRow.account_key == "acct_pilot_request"
+                )
+                rows = list(session.execute(stmt).scalars())
+                assert len(rows) == 1
+        finally:
+            engine.dispose()
     finally:
         service.close()
 

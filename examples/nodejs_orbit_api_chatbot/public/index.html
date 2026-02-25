@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orbit Node.js API Chatbot</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: "Segoe UI", sans-serif;
+        background: #0b1020;
+        color: #eef2ff;
+      }
+      .container {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 24px 16px 32px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 1.6rem;
+      }
+      p {
+        margin: 0 0 12px;
+        color: #b8c2ff;
+      }
+      .card {
+        background: #141b33;
+        border: 1px solid #27355f;
+        border-radius: 10px;
+        padding: 12px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+      input,
+      button,
+      textarea {
+        border-radius: 8px;
+        border: 1px solid #364a81;
+        background: #0f1630;
+        color: #eef2ff;
+        padding: 10px;
+        font-size: 0.95rem;
+      }
+      input {
+        flex: 1;
+        min-width: 180px;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:hover {
+        background: #1c2850;
+      }
+      #chat {
+        height: 420px;
+        overflow: auto;
+        margin: 10px 0;
+        padding: 10px;
+      }
+      .message {
+        margin-bottom: 10px;
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid #26365f;
+      }
+      .user {
+        background: #162546;
+      }
+      .assistant {
+        background: #122b23;
+        border-color: #2a5c4c;
+      }
+      .meta {
+        font-size: 0.78rem;
+        color: #9eb0f7;
+        margin-top: 6px;
+      }
+      .status {
+        font-size: 0.82rem;
+        color: #9bb0ff;
+      }
+      .danger {
+        color: #ff9ea0;
+      }
+      code {
+        color: #c9d5ff;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Orbit Node.js API-Key Chatbot</h1>
+      <p>Direct REST integration. No Orbit SDK in this project.</p>
+
+      <div class="card">
+        <div class="row">
+          <input id="userId" value="alice" placeholder="user id" />
+          <button id="healthBtn" type="button">Check health</button>
+          <span id="status" class="status">Ready</span>
+        </div>
+        <div id="chat" class="card"></div>
+        <form id="chatForm">
+          <div class="row">
+            <input
+              id="messageInput"
+              placeholder="Ask something (e.g. Why do I keep messing up loops?)"
+              autocomplete="off"
+            />
+            <button type="submit">Send</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script>
+      const chat = document.getElementById("chat");
+      const statusEl = document.getElementById("status");
+      const userIdEl = document.getElementById("userId");
+      const inputEl = document.getElementById("messageInput");
+      const formEl = document.getElementById("chatForm");
+      const healthBtn = document.getElementById("healthBtn");
+
+      function setStatus(text, danger = false) {
+        statusEl.textContent = text;
+        statusEl.className = danger ? "status danger" : "status";
+      }
+
+      function appendMessage(role, text, metaHtml = "") {
+        const wrapper = document.createElement("div");
+        wrapper.className = `message ${role}`;
+        const safeText = text
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;");
+        wrapper.innerHTML = `<div><strong>${role}:</strong></div><div>${safeText.replaceAll("\n", "<br>")}</div>${metaHtml}`;
+        chat.appendChild(wrapper);
+        chat.scrollTop = chat.scrollHeight;
+      }
+
+      async function requestJson(url, options = {}) {
+        const response = await fetch(url, options);
+        const text = await response.text();
+        let payload = {};
+        try {
+          payload = text ? JSON.parse(text) : {};
+        } catch {
+          payload = {};
+        }
+        if (!response.ok) {
+          const detail =
+            payload?.detail?.message ||
+            payload?.detail ||
+            payload?.error ||
+            text ||
+            `HTTP ${response.status}`;
+          throw new Error(String(detail));
+        }
+        return payload;
+      }
+
+      healthBtn.addEventListener("click", async () => {
+        try {
+          setStatus("Checking health...");
+          const payload = await requestJson("/api/health");
+          setStatus(`Orbit health: ${payload?.orbit?.status || "ok"}`);
+        } catch (error) {
+          setStatus(error.message, true);
+        }
+      });
+
+      formEl.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const userId = userIdEl.value.trim() || "demo-user";
+        const message = inputEl.value.trim();
+        if (!message) {
+          return;
+        }
+        inputEl.value = "";
+        appendMessage("user", message);
+        setStatus("Sending...");
+        try {
+          const payload = await requestJson("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId, message }),
+          });
+          const memoryId = payload.assistant_memory_id;
+          const meta = `
+            <div class="meta">
+              mode=${payload.generation_mode},
+              context_items=${payload.context_items},
+              assistant_memory_id=${memoryId || "n/a"}
+            </div>
+            ${
+              memoryId
+                ? `<div class="meta">
+                    <button data-memory-id="${memoryId}" data-helpful="true">Helpful</button>
+                    <button data-memory-id="${memoryId}" data-helpful="false">Not helpful</button>
+                  </div>`
+                : ""
+            }
+          `;
+          appendMessage("assistant", payload.response || "(empty response)", meta);
+          setStatus("Response received");
+        } catch (error) {
+          appendMessage("assistant", `Error: ${error.message}`);
+          setStatus(error.message, true);
+        }
+      });
+
+      chat.addEventListener("click", async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLButtonElement)) {
+          return;
+        }
+        const memoryId = target.dataset.memoryId || "";
+        const helpful = target.dataset.helpful === "true";
+        if (!memoryId) {
+          return;
+        }
+        try {
+          setStatus("Sending feedback...");
+          await requestJson("/api/feedback", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ memoryId, helpful }),
+          });
+          setStatus("Feedback recorded");
+        } catch (error) {
+          setStatus(error.message, true);
+        }
+      });
+    </script>
+  </body>
+</html>

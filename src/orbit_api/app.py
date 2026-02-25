@@ -43,6 +43,7 @@ from orbit.models import (
     IngestRequest,
     IngestResponse,
     PaginatedMemoriesResponse,
+    PilotProRequestResponse,
     RetrieveRequest,
     RetrieveResponse,
     StatusResponse,
@@ -509,6 +510,33 @@ def create_app(
         return service.validate_token(auth)
 
     @app.post(
+        "/v1/dashboard/pilot-pro/request",
+        response_model=PilotProRequestResponse,
+    )
+    @limit(config.dashboard_key_per_minute_limit)
+    def request_pilot_pro_endpoint(
+        request: Request,
+        response: Response,
+        service: Annotated[OrbitApiService, Depends(get_service)],
+        auth: Annotated[AuthContext, Depends(require_keys_write_scope)],
+    ) -> PilotProRequestResponse:
+        response.headers["Cache-Control"] = "no-store"
+        result = service.request_pilot_pro(
+            account_key=auth.subject,
+            actor_subject=_actor_subject(auth),
+            actor_email=_actor_email(auth),
+            actor_name=_actor_name(auth),
+        )
+        log.info(
+            "request_pilot_pro",
+            account=auth.subject,
+            created=result.created,
+            email_sent=result.email_sent,
+            path=str(request.url.path),
+        )
+        return result
+
+    @app.post(
         "/v1/dashboard/keys",
         response_model=ApiKeyIssueResponse,
         status_code=status.HTTP_201_CREATED,
@@ -691,6 +719,22 @@ def _actor_subject(auth: AuthContext) -> str:
     raw = auth.claims.get("auth_subject")
     normalized = str(raw).strip() if raw is not None else ""
     return normalized or auth.subject
+
+
+def _actor_email(auth: AuthContext) -> str | None:
+    raw = auth.claims.get("email")
+    if raw is None:
+        return None
+    normalized = str(raw).strip().lower()
+    return normalized or None
+
+
+def _actor_name(auth: AuthContext) -> str | None:
+    raw = auth.claims.get("name")
+    if raw is None:
+        return None
+    normalized = str(raw).strip()
+    return normalized or None
 
 
 def _service_from_app(app: FastAPI) -> OrbitApiService:

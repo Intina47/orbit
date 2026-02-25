@@ -34,7 +34,6 @@ import {
 import {
   DASHBOARD_DEFAULT_SCOPES,
   DASHBOARD_SCOPE_OPTIONS,
-  getPilotProContactEmail,
   OrbitApiKeyIssueResponse,
   OrbitApiKeySummary,
   OrbitDashboardApiError,
@@ -81,6 +80,7 @@ export function DashboardConsole() {
   const [createName, setCreateName] = useState("Production key")
   const [createScopes, setCreateScopes] = useState<string[]>([...DASHBOARD_DEFAULT_SCOPES])
   const [isCreating, setIsCreating] = useState(false)
+  const [isRequestingPilotPro, setIsRequestingPilotPro] = useState(false)
 
   const [revokeTarget, setRevokeTarget] = useState<OrbitApiKeySummary | null>(null)
   const [isRevoking, setIsRevoking] = useState(false)
@@ -361,6 +361,7 @@ export function DashboardConsole() {
       setStatusError(null)
       setMetricsText("")
       setMetricsError(null)
+      setIsRequestingPilotPro(false)
     } catch (error) {
       setAuthError(readErrorMessage(error))
     } finally {
@@ -482,6 +483,33 @@ export function DashboardConsole() {
     }
   }
 
+  const handlePilotProRequest = async () => {
+    if (!usageSummary || usageSummary.pilotProRequested || isRequestingPilotPro) {
+      return
+    }
+    setIsRequestingPilotPro(true)
+    try {
+      const result = await client.requestPilotPro()
+      setStatusTone("success")
+      setStatusMessage(
+        result.email_sent
+          ? "Pilot Pro request sent. We'll follow up by email."
+          : "Pilot Pro request saved. We will follow up shortly.",
+      )
+      refreshCurrentPage()
+    } catch (error) {
+      if (isUnauthorized(error)) {
+        setAuthState("signed_out")
+        setAuthError("Dashboard session expired. Sign in again.")
+        return
+      }
+      setStatusTone("error")
+      setStatusMessage(readErrorMessage(error))
+    } finally {
+      setIsRequestingPilotPro(false)
+    }
+  }
+
   const toggleCreateScope = (scope: string, checked: boolean) => {
     setCreateScopes((current) => {
       if (checked) {
@@ -519,7 +547,6 @@ export function DashboardConsole() {
   const isAuthenticated = authState === "signed_in"
   const usageSummary = accountStatus ? deriveUsageSummary(accountStatus, keys) : null
   const usageAlerts = usageSummary ? buildUsageAlerts(usageSummary) : []
-  const pilotProRequestHref = buildPilotProRequestHref(usageSummary)
   const metricsSnapshot = useMemo(
     () => parsePrometheusMetrics(metricsText),
     [metricsText],
@@ -670,6 +697,15 @@ export function DashboardConsole() {
                     Active keys: {formatCount(usageSummary.activeApiKeys)}/{formatCount(usageSummary.apiKeyLimit)} | Resets{" "}
                     {usageSummary.resetAtLabel}
                   </div>
+                  {usageSummary.pilotProRequested && (
+                    <div className="mt-1 text-xs text-primary">
+                      Pilot Pro request sent
+                      {usageSummary.pilotProRequestedAtLabel
+                        ? ` on ${usageSummary.pilotProRequestedAtLabel}`
+                        : ""}
+                      .
+                    </div>
+                  )}
                 </div>
 
                 {usageAlerts.map((alert) => (
@@ -686,11 +722,27 @@ export function DashboardConsole() {
                     <div className="font-medium">{alert.title}</div>
                     <div className="mt-1 text-xs opacity-90">{alert.body}</div>
                     <div className="mt-3 flex flex-wrap gap-2">
-                      <Button asChild size="sm">
-                        <a href={pilotProRequestHref}>Request Pilot Pro</a>
+                      <Button
+                        size="sm"
+                        onClick={handlePilotProRequest}
+                        disabled={usageSummary.pilotProRequested || isRequestingPilotPro}
+                      >
+                        {usageSummary.pilotProRequested
+                          ? "Request sent"
+                          : isRequestingPilotPro
+                            ? "Sending..."
+                            : "Request Pilot Pro"}
                       </Button>
-                      <Button asChild size="sm" variant="outline">
-                        <a href="#usage-breakdown">View usage</a>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          document
+                            .getElementById("usage-breakdown")
+                            ?.scrollIntoView({ behavior: "smooth", block: "start" })
+                        }}
+                      >
+                        View usage
                       </Button>
                     </div>
                   </div>
@@ -1148,6 +1200,9 @@ type UsageSummary = {
   resetAtLabel: string
   warningThresholdPercent: number
   criticalThresholdPercent: number
+  pilotProRequested: boolean
+  pilotProRequestStatus: string
+  pilotProRequestedAtLabel: string | null
 }
 
 type UsageAlert = {
@@ -1173,6 +1228,9 @@ function deriveUsageSummary(
   const activeApiKeysFromStatus = sanitizeCount(status.account_usage.active_api_keys ?? 0)
   const activeApiKeysFromList = keys.filter((item) => item.status === "active").length
   const resetAtIso = normalizeOptionalString(quota.reset_at)
+  const pilotProRequestStatus =
+    normalizeOptionalString(status.pilot_pro_request?.status)?.toLowerCase() || "not_requested"
+  const pilotProRequestedAtIso = normalizeOptionalString(status.pilot_pro_request?.requested_at)
   return {
     planLabel,
     planCode,
@@ -1186,6 +1244,9 @@ function deriveUsageSummary(
     resetAtLabel: resetAtIso ? formatDate(resetAtIso) : "next month (UTC)",
     warningThresholdPercent: sanitizePercent(quota.warning_threshold_percent, 80),
     criticalThresholdPercent: sanitizePercent(quota.critical_threshold_percent, 95),
+    pilotProRequested: pilotProRequestStatus === "requested",
+    pilotProRequestStatus,
+    pilotProRequestedAtLabel: pilotProRequestedAtIso ? formatDate(pilotProRequestedAtIso) : null,
   }
 }
 
@@ -1267,24 +1328,6 @@ function buildResourceAlerts(input: {
     ]
   }
   return []
-}
-
-function buildPilotProRequestHref(summary: UsageSummary | null): string {
-  const contactEmail = getPilotProContactEmail()
-  const subject = "Orbit Pilot Pro request"
-  const body = summary
-    ? [
-        "Hi Orbit team,",
-        "",
-        "I want Pilot Pro access.",
-        "",
-        `Plan: ${summary.planLabel}`,
-        `Ingest usage: ${summary.ingestUsed}/${summary.ingestLimit}`,
-        `Retrieve usage: ${summary.retrieveUsed}/${summary.retrieveLimit}`,
-        `Active API keys: ${summary.activeApiKeys}/${summary.apiKeyLimit}`,
-      ].join("\n")
-    : "Hi Orbit team,\n\nI want Pilot Pro access."
-  return `mailto:${contactEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
 }
 
 function resolveLimit(primary: number | null | undefined, fallback: number): number {

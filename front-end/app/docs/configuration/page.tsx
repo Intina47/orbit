@@ -38,6 +38,10 @@ export default function ConfigurationPage() {
         { var: "ORBIT_RATE_LIMIT_PILOT_PRO_QUERIES_PER_MONTH", desc: "Pilot Pro monthly retrieve quota" },
         { var: "ORBIT_RATE_LIMIT_PILOT_PRO_API_KEYS", desc: "Pilot Pro active API key cap" },
         { var: "ORBIT_PILOT_PRO_ACCOUNT_KEYS", desc: "Comma-separated account_key allowlist for invite-only Pilot Pro" },
+        { var: "ORBIT_PILOT_PRO_RESEND_API_KEY", desc: "Resend API key for Pilot Pro request notifications" },
+        { var: "ORBIT_PILOT_PRO_REQUEST_ADMIN_EMAIL", desc: "Admin destination email for Pilot Pro request notifications" },
+        { var: "ORBIT_PILOT_PRO_REQUEST_FROM_EMAIL", desc: "Sender identity used by Resend for Pilot Pro notifications" },
+        { var: "ORBIT_PILOT_PRO_EMAIL_TIMEOUT_SECONDS", desc: "Resend request timeout (seconds)" },
         { var: "ORBIT_USAGE_WARNING_THRESHOLD_PERCENT", desc: "Usage warning threshold (dashboard prompts)" },
         { var: "ORBIT_USAGE_CRITICAL_THRESHOLD_PERCENT", desc: "Usage critical threshold (dashboard prompts)" },
         { var: "ORBIT_MAX_INGEST_CONTENT_CHARS", desc: "Max ingest content length" },
@@ -74,7 +78,6 @@ export default function ConfigurationPage() {
       title: "Frontend (Vercel/Next.js)",
       vars: [
         { var: "NEXT_PUBLIC_ORBIT_API_BASE_URL", desc: "Public API base URL for docs/UI display" },
-        { var: "NEXT_PUBLIC_ORBIT_PILOT_PRO_CONTACT_EMAIL", desc: "Dashboard Pilot Pro CTA destination email" },
         { var: "ORBIT_DASHBOARD_PROXY_BASE_URL", desc: "Optional server-side proxy target override" },
         { var: "ORBIT_DASHBOARD_PROXY_AUTH_MODE", desc: "exchange | static" },
         { var: "ORBIT_DASHBOARD_ORBIT_JWT_SECRET", desc: "Exchange-mode JWT signing secret (server only)" },

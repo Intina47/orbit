@@ -18,6 +18,9 @@ export default function RestEndpointsPage() {
         <p className="text-xs text-muted-foreground leading-relaxed">
           Orbit Cloud users should create keys in <a href="/dashboard" className="text-primary hover:underline">Dashboard</a> and replace <code className="text-primary">{"<jwt-token>"}</code> with <code className="text-primary">orbit_pk_...</code>. Self-hosted users can keep JWT.
         </p>
+        <p className="text-xs text-muted-foreground leading-relaxed mt-2">
+          Need full non-SDK app examples? See <a href="/docs/examples" className="text-primary hover:underline">Direct API (No SDK)</a> for Node.js, Python, and Go samples.
+        </p>
       </div>
 
       {/* Ingest */}

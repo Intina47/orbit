@@ -122,10 +122,20 @@ class AccountUsage(OrbitModel):
     quota: AccountQuota
 
 
+class PilotProRequest(OrbitModel):
+    requested: bool
+    status: str
+    requested_at: datetime | None = None
+    requested_by_email: str | None = None
+    requested_by_name: str | None = None
+    email_sent_at: datetime | None = None
+
+
 class StatusResponse(OrbitModel):
     connected: bool
     api_version: str
     account_usage: AccountUsage
+    pilot_pro_request: PilotProRequest | None = None
     latest_ingestion: datetime | None = None
     uptime_percent: float
 
@@ -257,6 +267,12 @@ class ApiKeyRotateRequest(OrbitModel):
 class ApiKeyRotateResponse(OrbitModel):
     revoked_key_id: str
     new_key: ApiKeyIssueResponse
+
+
+class PilotProRequestResponse(OrbitModel):
+    request: PilotProRequest
+    created: bool
+    email_sent: bool
 
 
 class PaginatedMemoriesResponse(OrbitModel):

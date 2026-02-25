@@ -16,6 +16,7 @@ from time import perf_counter
 from typing import Any, TypeVar
 from uuid import uuid4
 
+import httpx
 import numpy as np
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import IntegrityError
@@ -31,6 +32,7 @@ from memory_engine.storage.db import (
     ApiDashboardUserRow,
     ApiIdempotencyRow,
     ApiKeyRow,
+    ApiPilotProRequestRow,
     Base,
 )
 from orbit.models import (
@@ -48,6 +50,8 @@ from orbit.models import (
     IngestResponse,
     Memory,
     PaginatedMemoriesResponse,
+    PilotProRequest,
+    PilotProRequestResponse,
     RetrieveRequest,
     RetrieveResponse,
     StatusResponse,
@@ -935,6 +939,7 @@ class OrbitApiService:
         with self._state_lock:
             latest_ingestion = self._latest_ingestion
         usage = self._read_usage_row(normalized_account_key)
+        pilot_pro_request_row = self._read_pilot_pro_request(normalized_account_key)
         storage_mb = self._storage_usage_mb(account_key=normalized_account_key)
         active_api_keys = self._count_active_api_keys(normalized_account_key)
         events_month = (
@@ -950,6 +955,10 @@ class OrbitApiService:
             and usage.month_year == now.year
             and usage.month_value == now.month
             else 0
+        )
+        pilot_pro_request = self._as_pilot_pro_request(
+            row=pilot_pro_request_row,
+            policy=policy,
         )
         return StatusResponse(
             connected=True,
@@ -975,8 +984,129 @@ class OrbitApiService:
                     critical_threshold_percent=policy.critical_threshold_percent,
                 ),
             ),
+            pilot_pro_request=pilot_pro_request,
             latest_ingestion=latest_ingestion,
             uptime_percent=self._config.uptime_percent,
+        )
+
+    def request_pilot_pro(
+        self,
+        *,
+        account_key: str,
+        actor_subject: str | None,
+        actor_email: str | None = None,
+        actor_name: str | None = None,
+    ) -> PilotProRequestResponse:
+        normalized_account_key = self._normalize_account_key(account_key)
+        normalized_actor_subject = (
+            self._normalize_optional_actor_subject(actor_subject)
+            or normalized_account_key
+        )
+        normalized_actor_email = self._normalize_optional_email(actor_email)
+        normalized_actor_name = self._normalize_optional_display_name(actor_name)
+        created = False
+        should_send_email = False
+
+        with self._state_session_factory() as session, session.begin():
+            row = self._select_pilot_pro_request_for_update(
+                session=session,
+                account_key=normalized_account_key,
+            )
+            now = datetime.now(UTC)
+            if row is None:
+                row = ApiPilotProRequestRow(
+                    account_key=normalized_account_key,
+                    status="requested",
+                    requested_by_subject=normalized_actor_subject,
+                    requested_by_email=normalized_actor_email,
+                    requested_by_name=normalized_actor_name,
+                    requested_at=now,
+                    email_sent_at=None,
+                    email_last_attempt_at=None,
+                    email_delivery_error=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(row)
+                created = True
+                should_send_email = True
+            else:
+                prior_status = self._normalize_pilot_pro_status(row.status)
+                if prior_status != "requested":
+                    row.status = "requested"
+                    row.requested_at = now
+                    row.email_sent_at = None
+                    row.email_last_attempt_at = None
+                    row.email_delivery_error = None
+                    should_send_email = True
+                row.requested_by_subject = normalized_actor_subject
+                row.requested_by_email = normalized_actor_email or row.requested_by_email
+                row.requested_by_name = normalized_actor_name or row.requested_by_name
+                row.updated_at = now
+
+            self._insert_audit_row(
+                session=session,
+                account_key=normalized_account_key,
+                actor_subject=normalized_actor_subject,
+                actor_type="dashboard_user",
+                action="pilot_pro_requested",
+                target_type="account",
+                target_id=normalized_account_key,
+                metadata={
+                    "created": created,
+                    "requested_by_email": normalized_actor_email,
+                    "requested_by_name": normalized_actor_name,
+                },
+            )
+            session.flush()
+
+        email_sent = False
+        if should_send_email:
+            email_sent, delivery_error, attempted_at = self._send_pilot_pro_request_email(
+                account_key=normalized_account_key,
+                actor_subject=normalized_actor_subject,
+                actor_email=normalized_actor_email,
+                actor_name=normalized_actor_name,
+            )
+            with self._state_session_factory() as session, session.begin():
+                row = self._select_pilot_pro_request_for_update(
+                    session=session,
+                    account_key=normalized_account_key,
+                )
+                if row is not None:
+                    row.email_last_attempt_at = attempted_at
+                    row.email_delivery_error = delivery_error
+                    if email_sent:
+                        row.email_sent_at = attempted_at
+                    row.updated_at = datetime.now(UTC)
+                    self._insert_audit_row(
+                        session=session,
+                        account_key=normalized_account_key,
+                        actor_subject=normalized_actor_subject,
+                        actor_type="system",
+                        action=(
+                            "pilot_pro_request_email_sent"
+                            if email_sent
+                            else "pilot_pro_request_email_failed"
+                        ),
+                        target_type="account",
+                        target_id=normalized_account_key,
+                        metadata={
+                            "delivery_error": delivery_error,
+                        },
+                    )
+        else:
+            existing = self._read_pilot_pro_request(normalized_account_key)
+            email_sent = bool(existing and existing.email_sent_at is not None)
+
+        row = self._read_pilot_pro_request(normalized_account_key)
+        return PilotProRequestResponse(
+            request=self._as_pilot_pro_request(
+                row=row,
+                policy=self._plan_policy(normalized_account_key),
+            ),
+            created=created,
+            email_sent=email_sent,
         )
 
     def health(self) -> dict[str, str]:
@@ -2018,6 +2148,13 @@ class OrbitApiService:
             )
             return session.execute(stmt).scalar_one_or_none()
 
+    def _read_pilot_pro_request(self, account_key: str) -> ApiPilotProRequestRow | None:
+        with self._state_session_factory() as session:
+            stmt = select(ApiPilotProRequestRow).where(
+                ApiPilotProRequestRow.account_key == account_key
+            )
+            return session.execute(stmt).scalar_one_or_none()
+
     def _select_usage_row_for_update(
         self,
         *,
@@ -2027,6 +2164,19 @@ class OrbitApiService:
         stmt = (
             select(ApiAccountUsageRow)
             .where(ApiAccountUsageRow.account_key == account_key)
+            .with_for_update()
+        )
+        return session.execute(stmt).scalar_one_or_none()
+
+    def _select_pilot_pro_request_for_update(
+        self,
+        *,
+        session: Session,
+        account_key: str,
+    ) -> ApiPilotProRequestRow | None:
+        stmt = (
+            select(ApiPilotProRequestRow)
+            .where(ApiPilotProRequestRow.account_key == account_key)
             .with_for_update()
         )
         return session.execute(stmt).scalar_one_or_none()
@@ -2095,6 +2245,95 @@ class OrbitApiService:
             retention_days=self._config.free_retention_days,
             warning_threshold_percent=self._config.usage_warning_threshold_percent,
             critical_threshold_percent=self._config.usage_critical_threshold_percent,
+        )
+
+    def _send_pilot_pro_request_email(
+        self,
+        *,
+        account_key: str,
+        actor_subject: str,
+        actor_email: str | None,
+        actor_name: str | None,
+    ) -> tuple[bool, str | None, datetime]:
+        attempted_at = datetime.now(UTC)
+        api_key = (self._config.pilot_pro_resend_api_key or "").strip()
+        admin_email = (self._config.pilot_pro_request_admin_email or "").strip()
+        from_email = self._config.pilot_pro_request_from_email.strip()
+
+        if not api_key or not admin_email or not from_email:
+            return (
+                False,
+                "resend_not_configured: set ORBIT_PILOT_PRO_RESEND_API_KEY, "
+                "ORBIT_PILOT_PRO_REQUEST_ADMIN_EMAIL, ORBIT_PILOT_PRO_REQUEST_FROM_EMAIL",
+                attempted_at,
+            )
+
+        subject = f"Orbit Pilot Pro request - {account_key}"
+        text_lines = [
+            "New Pilot Pro request received.",
+            "",
+            f"Account key: {account_key}",
+            f"Requested at (UTC): {attempted_at.isoformat()}",
+            f"Requester subject: {actor_subject}",
+            f"Requester email: {actor_email or 'not_provided'}",
+            f"Requester name: {actor_name or 'not_provided'}",
+        ]
+        text_body = "\n".join(text_lines)
+
+        payload = {
+            "from": from_email,
+            "to": [admin_email],
+            "subject": subject,
+            "text": text_body,
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        try:
+            with httpx.Client(timeout=self._config.pilot_pro_email_timeout_seconds) as client:
+                response = client.post(
+                    "https://api.resend.com/emails",
+                    headers=headers,
+                    json=payload,
+                )
+        except httpx.HTTPError as exc:
+            message = str(exc).strip() or "unknown_http_error"
+            return False, f"resend_transport_error: {message[:512]}", attempted_at
+
+        if response.status_code >= 300:
+            error_text = response.text.strip() or f"status={response.status_code}"
+            return False, f"resend_http_error: {error_text[:1024]}", attempted_at
+
+        return True, None, attempted_at
+
+    def _as_pilot_pro_request(
+        self,
+        *,
+        row: ApiPilotProRequestRow | None,
+        policy: PlanQuotaPolicy,
+    ) -> PilotProRequest:
+        if row is None:
+            default_status = "approved" if policy.plan == "pilot_pro" else "not_requested"
+            return PilotProRequest(
+                requested=False,
+                status=default_status,
+                requested_at=None,
+                requested_by_email=None,
+                requested_by_name=None,
+                email_sent_at=None,
+            )
+
+        status = self._normalize_pilot_pro_status(row.status)
+        if policy.plan == "pilot_pro":
+            status = "approved"
+        return PilotProRequest(
+            requested=status == "requested",
+            status=status,
+            requested_at=row.requested_at,
+            requested_by_email=row.requested_by_email,
+            requested_by_name=row.requested_by_name,
+            email_sent_at=row.email_sent_at,
         )
 
     def _lookup_dashboard_account_mapping(
@@ -2595,6 +2834,48 @@ class OrbitApiService:
         if len(normalized) > 128:
             return normalized[:128]
         return normalized
+
+    @staticmethod
+    def _normalize_optional_actor_subject(value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if len(normalized) > 255:
+            return normalized[:255]
+        return normalized
+
+    @staticmethod
+    def _normalize_optional_email(value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        if len(normalized) > 320:
+            return normalized[:320]
+        return normalized
+
+    @staticmethod
+    def _normalize_optional_display_name(value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if len(normalized) > 255:
+            return normalized[:255]
+        return normalized
+
+    @staticmethod
+    def _normalize_pilot_pro_status(value: str | None) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"requested", "approved", "rejected", "not_requested"}:
+            return normalized
+        if normalized:
+            return normalized
+        return "requested"
 
     @staticmethod
     def _normalize_auth_subject(value: str) -> str:

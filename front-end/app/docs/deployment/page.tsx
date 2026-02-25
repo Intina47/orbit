@@ -71,8 +71,6 @@ export default function DeploymentPage() {
       </p>
       <CodeBlock
         code={`NEXT_PUBLIC_ORBIT_API_BASE_URL=https://orbit-api-ic4qh4dzga-uc.a.run.app
-# Optional dashboard CTA destination:
-# NEXT_PUBLIC_ORBIT_PILOT_PRO_CONTACT_EMAIL=hello@theorbit.dev
 # Optional if different from NEXT_PUBLIC_ORBIT_API_BASE_URL:
 # ORBIT_DASHBOARD_PROXY_BASE_URL=https://orbit-api-ic4qh4dzga-uc.a.run.app
 ORBIT_DASHBOARD_PROXY_AUTH_MODE=exchange
@@ -114,6 +112,10 @@ ORBIT_RATE_LIMIT_PILOT_PRO_EVENTS_PER_MONTH=250000
 ORBIT_RATE_LIMIT_PILOT_PRO_QUERIES_PER_MONTH=1000000
 ORBIT_RATE_LIMIT_PILOT_PRO_API_KEYS=25
 ORBIT_PILOT_PRO_ACCOUNT_KEYS=acct_team_a,acct_team_b
+ORBIT_PILOT_PRO_RESEND_API_KEY=<resend-api-key>
+ORBIT_PILOT_PRO_REQUEST_ADMIN_EMAIL=hello@theorbit.dev
+ORBIT_PILOT_PRO_REQUEST_FROM_EMAIL="Orbit <onboarding@resend.dev>"
+ORBIT_PILOT_PRO_EMAIL_TIMEOUT_SECONDS=10
 ORBIT_USAGE_WARNING_THRESHOLD_PERCENT=80
 ORBIT_USAGE_CRITICAL_THRESHOLD_PERCENT=95`}
         language="bash"

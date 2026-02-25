@@ -39,6 +39,10 @@ class ApiConfig(BaseModel):
     uptime_percent: float = 99.9
     environment: str = "development"
     dashboard_auto_provision_accounts: bool = True
+    pilot_pro_resend_api_key: str | None = None
+    pilot_pro_request_admin_email: str | None = None
+    pilot_pro_request_from_email: str = "Orbit <onboarding@resend.dev>"
+    pilot_pro_email_timeout_seconds: float = 10.0
 
     jwt_secret: str = "orbit-dev-secret-change-me"
     jwt_algorithm: str = "HS256"
@@ -136,6 +140,23 @@ class ApiConfig(BaseModel):
             msg = "environment cannot be empty"
             raise ValueError(msg)
         return normalized
+
+    @field_validator("pilot_pro_request_from_email")
+    @classmethod
+    def validate_pilot_pro_request_from_email(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            msg = "pilot_pro_request_from_email cannot be empty"
+            raise ValueError(msg)
+        return normalized
+
+    @field_validator("pilot_pro_email_timeout_seconds")
+    @classmethod
+    def validate_positive_timeout(cls, value: float) -> float:
+        if value <= 0:
+            msg = "pilot_pro_email_timeout_seconds must be > 0"
+            raise ValueError(msg)
+        return value
 
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
@@ -246,6 +267,18 @@ class ApiConfig(BaseModel):
             dashboard_auto_provision_accounts=_env_bool(
                 "ORBIT_DASHBOARD_AUTO_PROVISION_ACCOUNTS",
                 True,
+            ),
+            pilot_pro_resend_api_key=_env_optional("ORBIT_PILOT_PRO_RESEND_API_KEY"),
+            pilot_pro_request_admin_email=_env_optional(
+                "ORBIT_PILOT_PRO_REQUEST_ADMIN_EMAIL"
+            ),
+            pilot_pro_request_from_email=os.getenv(
+                "ORBIT_PILOT_PRO_REQUEST_FROM_EMAIL",
+                "Orbit <onboarding@resend.dev>",
+            ),
+            pilot_pro_email_timeout_seconds=_env_float(
+                "ORBIT_PILOT_PRO_EMAIL_TIMEOUT_SECONDS",
+                10.0,
             ),
             jwt_secret=os.getenv("ORBIT_JWT_SECRET", "orbit-dev-secret-change-me"),
             jwt_algorithm=os.getenv("ORBIT_JWT_ALGORITHM", "HS256"),

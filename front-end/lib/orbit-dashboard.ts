@@ -54,6 +54,15 @@ export type OrbitAccountQuota = {
   critical_threshold_percent?: number | null
 }
 
+export type OrbitPilotProRequest = {
+  requested: boolean
+  status: string
+  requested_at?: string | null
+  requested_by_email?: string | null
+  requested_by_name?: string | null
+  email_sent_at?: string | null
+}
+
 export type OrbitStatusResponse = {
   connected: boolean
   api_version: string
@@ -64,8 +73,15 @@ export type OrbitStatusResponse = {
     active_api_keys?: number | null
     quota: OrbitAccountQuota
   }
+  pilot_pro_request?: OrbitPilotProRequest | null
   latest_ingestion?: string | null
   uptime_percent: number
+}
+
+export type OrbitPilotProRequestResponse = {
+  request: OrbitPilotProRequest
+  created: boolean
+  email_sent: boolean
 }
 
 export type OrbitDashboardSessionResponse = {
@@ -87,7 +103,6 @@ export type OrbitDashboardSessionResponse = {
 
 const DEFAULT_PROXY_PREFIX = "/api/dashboard"
 const DEFAULT_ORBIT_API_BASE_URL = "http://localhost:8000"
-const DEFAULT_PILOT_PRO_CONTACT_EMAIL = "hello@theorbit.dev"
 
 export const DASHBOARD_SCOPE_OPTIONS = [
   "read",
@@ -116,14 +131,6 @@ export function getOrbitApiBaseUrl(): string {
     return DEFAULT_ORBIT_API_BASE_URL
   }
   return raw.replace(/\/+$/, "")
-}
-
-export function getPilotProContactEmail(): string {
-  const raw = process.env.NEXT_PUBLIC_ORBIT_PILOT_PRO_CONTACT_EMAIL?.trim()
-  if (!raw) {
-    return DEFAULT_PILOT_PRO_CONTACT_EMAIL
-  }
-  return raw
 }
 
 export class OrbitDashboardClient {
@@ -167,6 +174,12 @@ export class OrbitDashboardClient {
 
   async getStatus(): Promise<OrbitStatusResponse> {
     return this.request<OrbitStatusResponse>(`${this.proxyPrefix}/status`)
+  }
+
+  async requestPilotPro(): Promise<OrbitPilotProRequestResponse> {
+    return this.request<OrbitPilotProRequestResponse>(`${this.proxyPrefix}/pilot-pro/request`, {
+      method: "POST",
+    })
   }
 
   async getMetricsText(): Promise<string> {

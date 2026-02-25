@@ -1,0 +1,12 @@
+{
+  "name": "orbit-http-api-clients",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "node-example": "node node_fetch.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7"
+  }
+}

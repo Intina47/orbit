@@ -433,6 +433,45 @@ def test_api_dashboard_keys_enforce_plan_key_cap(tmp_path: Path) -> None:
     asyncio.run(_run())
 
 
+def test_api_dashboard_pilot_pro_request_persists_in_status(tmp_path: Path) -> None:
+    async def _run() -> None:
+        app = _build_app(tmp_path)
+        transport = httpx.ASGITransport(app=app)
+        jwt_headers = {
+            "Authorization": f"Bearer {_jwt_token(subject='pilot-user')}",
+        }
+
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            requested = await client.post(
+                "/v1/dashboard/pilot-pro/request",
+                headers=jwt_headers,
+            )
+            assert requested.status_code == 200
+            requested_body = requested.json()
+            assert requested_body["created"] is True
+            assert requested_body["email_sent"] is False
+            assert requested_body["request"]["requested"] is True
+            assert requested_body["request"]["status"] == "requested"
+
+            requested_again = await client.post(
+                "/v1/dashboard/pilot-pro/request",
+                headers=jwt_headers,
+            )
+            assert requested_again.status_code == 200
+            assert requested_again.json()["created"] is False
+
+            status = await client.get("/v1/status", headers=jwt_headers)
+            assert status.status_code == 200
+            status_body = status.json()
+            assert status_body["pilot_pro_request"]["requested"] is True
+            assert status_body["pilot_pro_request"]["status"] == "requested"
+
+    asyncio.run(_run())
+
+
 def test_api_dashboard_account_claim_mapping_shares_account(tmp_path: Path) -> None:
     async def _run() -> None:
         app = _build_app(tmp_path)

@@ -165,6 +165,32 @@ class ApiAuditLogRow(Base):
     )
 
 
+class ApiPilotProRequestRow(Base):
+    __tablename__ = "api_pilot_pro_requests"
+
+    account_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="requested")
+    requested_by_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    requested_by_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    requested_by_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    email_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    email_last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    email_delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
 def initialize_database(database_url: str) -> sessionmaker[Session]:
     connect_args = (
         {"check_same_thread": False} if database_url.startswith("sqlite") else {}
