@@ -7,6 +7,7 @@ import hmac
 import json
 import re
 import secrets
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -22,7 +23,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from decision_engine.models import MemoryRecord
+from decision_engine.models import MemoryRecord, RetrievedMemory
 from memory_engine.config import EngineConfig
 from memory_engine.engine import DecisionEngine
 from memory_engine.models.event import Event
@@ -829,6 +830,7 @@ class OrbitApiService:
             account_key=normalized_account_key,
         )
         ranked = self._engine.ranker.rank(query_embedding, candidates, now=now)
+        ranked = self._diversity_aware_rerank(ranked)
         ranked = self._reweight_ranked_by_query(
             query=request.query,
             ranked=ranked,
@@ -1500,6 +1502,35 @@ class OrbitApiService:
         reweighted.sort(key=lambda item: item.rank_score, reverse=True)
         return reweighted
 
+    def _diversity_aware_rerank(
+        self,
+        ranked: list[RetrievedMemory],
+    ) -> list[RetrievedMemory]:
+        if not ranked:
+            return ranked
+        bucket_counts: dict[str, int] = {}
+        reranked: list[RetrievedMemory] = []
+        for item in ranked:
+            bucket = self._intent_bucket(item.memory.intent)
+            existing = bucket_counts.get(bucket, 0)
+            repetition_penalty = 1.0 / (1.0 + 0.35 * existing)
+            assistant_penalty = self._assistant_length_penalty(item.memory)
+            novelty_bonus = 1.06 if existing == 0 and bucket != "assistant" else 1.0
+            adjusted_score = max(
+                0.0,
+                min(
+                    item.rank_score
+                    * repetition_penalty
+                    * assistant_penalty
+                    * novelty_bonus,
+                    2.0,
+                ),
+            )
+            reranked.append(item.model_copy(update={"rank_score": adjusted_score}))
+            bucket_counts[bucket] = existing + 1
+        reranked.sort(key=lambda item: item.rank_score, reverse=True)
+        return reranked
+
     def _query_focus(self, query: str) -> str:
         normalized_query = query.strip().lower()
         if self._is_style_or_format_query(normalized_query):
@@ -2050,6 +2081,18 @@ class OrbitApiService:
         }:
             return "profile"
         return "other"
+
+    def _assistant_length_penalty(self, memory: MemoryRecord) -> float:
+        if not self._is_assistant_intent(memory.intent):
+            return 1.0
+        word_count = len(memory.content.split())
+        if word_count > 220:
+            return 0.55
+        if word_count > 150:
+            return 0.72
+        if word_count > 90:
+            return 0.85
+        return 0.94
 
     @staticmethod
     def _is_assistant_intent(intent: str) -> bool:

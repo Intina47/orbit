@@ -134,6 +134,29 @@ def test_service_ingest_retrieve_feedback_and_status(tmp_path: Path) -> None:
         service.close()
 
 
+def test_diversity_rerank_prefers_short_non_assistant(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        long_assistant = _retrieved(
+            "assistant_long",
+            intent="assistant_response",
+            content=" ".join(["detailed assistant transcript"] * 120),
+            score=0.99,
+        )
+        short_profile = _retrieved(
+            "profile_short",
+            intent="user_fact",
+            content="Alice prefers concise analogies.",
+            score=0.78,
+        )
+        reranked = service._diversity_aware_rerank([long_assistant, short_profile])
+        assert reranked[0].memory.intent == "user_fact"
+        assert reranked[0].rank_score >= reranked[1].rank_score
+        assert reranked[1].memory.intent == "assistant_response"
+    finally:
+        service.close()
+
+
 def test_service_request_pilot_pro_persists_and_is_idempotent(tmp_path: Path) -> None:
     service = _service(tmp_path)
     try:
