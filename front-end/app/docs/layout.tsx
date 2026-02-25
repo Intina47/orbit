@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import { Nav } from "@/components/orbit/nav"
 import { DocsSidebar } from "@/components/orbit/docs-sidebar"
+import { DocsAiSetupFab } from "@/components/orbit/docs-ai-setup-fab"
 
 export const metadata: Metadata = {
   title: "Docs | Orbit",
@@ -23,6 +24,7 @@ export default function DocsLayout({
           </div>
         </main>
       </div>
+      <DocsAiSetupFab />
     </div>
   )
 }

@@ -78,6 +78,12 @@ export default function DocsOverview() {
         </div>
       </div>
 
+      <div className="border border-primary/30 bg-primary/5 p-4 mb-16">
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          Need code generated for your stack? Use the floating <span className="text-primary font-semibold">Setup with AI</span> button on this page to build a ready-to-paste prompt for ChatGPT, Claude, or Cursor.
+        </p>
+      </div>
+
       {/* Section grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-border">
         {sections.map((section) => (
