@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 from datetime import UTC, datetime
@@ -400,19 +401,58 @@ class SQLiteStorageManager:
 
     def _truncate_content(self, content: str, intent: str) -> str:
         normalized_intent = intent.strip().lower()
+        normalized_content = content
+        if normalized_intent.startswith("assistant_"):
+            normalized_content = self._compact_assistant_content(content)
         limit = (
             self._assistant_max_content_chars
             if normalized_intent.startswith("assistant_")
             else self._max_content_chars
         )
-        if len(content) <= limit:
-            return content
+        if len(normalized_content) <= limit:
+            return normalized_content
         if limit <= 64:
-            return content[:limit]
-        omitted = len(content) - limit
+            return normalized_content[:limit]
+        omitted = len(normalized_content) - limit
         return (
-            content[: limit - 48].rstrip()
+            normalized_content[: limit - 48].rstrip()
             + f"\n\n...[truncated {omitted} chars for storage efficiency]"
+        )
+
+    def _compact_assistant_content(self, content: str) -> str:
+        normalized = " ".join(content.split())
+        if not normalized:
+            return normalized
+
+        sentences = [
+            item.strip()
+            for item in re.split(r"(?<=[.!?])\s+", normalized)
+            if item.strip()
+        ]
+        if len(sentences) <= 1:
+            return normalized
+
+        unique_sentences: list[str] = []
+        seen: set[str] = set()
+        duplicate_count = 0
+        for sentence in sentences:
+            key = sentence.lower()
+            if key in seen:
+                duplicate_count += 1
+                continue
+            seen.add(key)
+            unique_sentences.append(sentence)
+
+        if duplicate_count == 0:
+            return normalized
+
+        compacted = " ".join(unique_sentences)
+        removed_chars = len(normalized) - len(compacted)
+        if removed_chars < 80 and duplicate_count < 2:
+            return normalized
+        return (
+            compacted
+            + f" [assistant content compacted: removed {duplicate_count} repeated segments]"
         )
 
     @staticmethod

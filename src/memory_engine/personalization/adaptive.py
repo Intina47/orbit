@@ -407,16 +407,23 @@ class AdaptivePersonalizationEngine:
         for memory in ranked_memories:
             if not self._is_assistant_intent(memory.intent):
                 continue
-            if memory.memory_id not in helpful_memory_ids or outcome_signal <= 0.0:
+            signal_strength = abs(outcome_signal)
+            if signal_strength <= 0.0:
                 continue
             entity_id = self._primary_entity(memory)
             if entity_id is None or entity_id in emitted_for_entity:
                 continue
             style = self._style_bucket(memory)
+            if memory.memory_id in helpful_memory_ids and outcome_signal > 0.0:
+                inferred_style = style
+            elif memory.memory_id not in helpful_memory_ids and outcome_signal < 0.0:
+                inferred_style = "detailed" if style == "concise" else "concise"
+            else:
+                continue
             candidate = self._update_preference_state(
                 entity_id=entity_id,
-                style=style,
-                signal=abs(outcome_signal),
+                style=inferred_style,
+                signal=signal_strength,
                 source_memory_id=memory.memory_id,
                 account_key=account_key,
             )
@@ -842,6 +849,16 @@ class AdaptivePersonalizationEngine:
         summary_text = memory.summary.lower().strip()
         if not text:
             text = summary_text
+        concise_markers = (
+            "concise",
+            "short",
+            "brief",
+            "quick steps",
+            "minimal reproducible snippet",
+            "one fix at a time",
+        )
+        if any(marker in text for marker in concise_markers):
+            return "concise"
         if any(
             marker in text
             for marker in (
@@ -849,7 +866,8 @@ class AdaptivePersonalizationEngine:
                 "worked examples",
                 "postmortem",
                 "regression tests",
-                "step-by-step",
+                "deep dive",
+                "comprehensive",
             )
         ):
             return "detailed"

@@ -19,3 +19,6 @@ dist/
 .venv-pypi-smoke/
 docs/_build/
 tmp/
+eval_reports/
+quality_reports/
+soak_reports/

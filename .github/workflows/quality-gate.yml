@@ -1,0 +1,56 @@
+name: quality-gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "scripts/**"
+      - "pyproject.toml"
+      - ".github/workflows/quality-gate.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "scripts/**"
+      - "pyproject.toml"
+      - ".github/workflows/quality-gate.yml"
+
+jobs:
+  python-quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Run quality gate
+        env:
+          LOG_LEVEL: WARNING
+        run: |
+          python scripts/check_quality_gate.py \
+            --output-dir quality_reports/ci \
+            --sqlite-dir tmp/ci_quality \
+            --soak-turns 80 \
+            --soak-probe-interval 20
+
+      - name: Upload quality artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-gate-artifacts
+          path: quality_reports/ci

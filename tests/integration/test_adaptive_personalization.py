@@ -132,6 +132,46 @@ def test_feedback_creates_detailed_inferred_preference_memory(engine) -> None:
     assert len(derived) >= 1
 
 
+def test_negative_feedback_on_detailed_style_infers_concise_preference(engine) -> None:
+    assistant_ids: list[str] = []
+    for idx in range(4):
+        memory_id = _store_event(
+            engine,
+            Event(
+                timestamp=1_700_360_000 + idx,
+                entity_id="alice",
+                event_type="assistant_response",
+                description=(
+                    "Start by isolating the failing path, then map preconditions and "
+                    "runtime state. Document assumptions, add validation checks, "
+                    "refactor module boundaries, and finish with regression tests."
+                ),
+                metadata={"intent": "assistant_response"},
+            ),
+        )
+        assistant_ids.append(memory_id)
+
+    for memory_id in assistant_ids:
+        engine.record_feedback(
+            query=f"feedback-negative-{memory_id}",
+            ranked_memory_ids=[memory_id],
+            helpful_memory_ids=[],
+            outcome_signal=-1.0,
+        )
+
+    memories = engine.get_memory(entity_id="alice")
+    preferences = [item for item in memories if item.intent == "inferred_preference"]
+
+    assert len(preferences) >= 1
+    assert "concise explanations" in preferences[-1].content.lower()
+    derived = [
+        relation
+        for relation in preferences[-1].relationships
+        if relation.startswith("derived_from:")
+    ]
+    assert len(derived) >= 1
+
+
 def test_failed_attempts_create_recurring_failure_inference(engine) -> None:
     attempts = [
         "I failed again: TypeError when indexing a list with string keys.",
