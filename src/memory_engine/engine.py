@@ -30,6 +30,7 @@ from memory_engine.personalization import (
     AdaptivePersonalizationEngine,
     InferredMemoryCandidate,
 )
+from memory_engine.personalization.decay_policy import compute_inferred_decay_plan
 from memory_engine.stage1_input.embedding import build_embedding_provider
 from memory_engine.stage1_input.extractors import build_semantic_provider
 from memory_engine.stage1_input.processor import InputProcessor
@@ -466,15 +467,16 @@ class DecisionEngine:
             metadata=metadata,
         )
         processed = self.input_processor.process(event)
+        decay_plan = compute_inferred_decay_plan(candidate)
         inferred_decision = StorageDecision(
             store=True,
             storage_tier="persistent",
             confidence=max(min(candidate.confidence, 0.99), 0.5),
-            decay_rate=1.0 / 90.0,
-            decay_half_life=90.0,
+            decay_rate=decay_plan.decay_rate,
+            decay_half_life=decay_plan.half_life_days,
             should_compress=False,
             rationale="adaptive_personalization_inference",
-            trace={"inferred": True},
+            trace={"inferred": True, "decay_policy": decay_plan.label},
         )
         stored = self._store_core_memory(
             processed=processed,
