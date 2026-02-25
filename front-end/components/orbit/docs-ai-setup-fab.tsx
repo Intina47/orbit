@@ -27,6 +27,11 @@ const appTargets: Array<{ id: AppTarget; label: string }> = [
   { id: "support_bot", label: "Support Assistant" },
 ]
 
+const orbitWebsiteUrl = "https://orbit-memory.vercel.app"
+const orbitDocsUrl = "https://orbit-memory.vercel.app/docs"
+const orbitGithubRepoUrl = "https://github.com/intina47/orbit"
+const orbitGithubExamplesBaseUrl = "https://github.com/intina47/orbit/tree/main/examples"
+
 export function DocsAiSetupFab() {
   const [open, setOpen] = useState(false)
   const [aiTarget, setAiTarget] = useState<AiTarget>("chatgpt")
@@ -201,6 +206,13 @@ function buildPrompt({
   language: LanguageTarget
   appType: AppTarget
 }): string {
+  const productContext = [
+    "Orbit is memory infrastructure for developer-facing AI products.",
+    "Goal: persist user-relevant signals and retrieve focused context with ingest -> retrieve -> feedback.",
+    "Official docs: https://orbit-memory.vercel.app/docs",
+    "Official repository: https://github.com/intina47/orbit",
+  ]
+
   const routeInstructions =
     setupRoute === "cloud"
       ? [
@@ -216,10 +228,29 @@ function buildPrompt({
           "Include local run commands and a health check.",
         ]
 
+  const apiContract = [
+    "Use exact Orbit API contracts:",
+    "- POST /v1/ingest with JSON body { content, event_type, entity_id, metadata? }",
+    "- GET /v1/retrieve with query params query, entity_id, limit (not POST body)",
+    "- POST /v1/feedback with JSON body { memory_id, helpful, outcome_value, metadata? }",
+    "- Retrieve responses include memories[] with memory_id and content fields",
+    "- For assistant writes, use event_type='assistant_response'",
+  ]
+
+  const hardValidationRules = [
+    "Hard validation rules (must pass):",
+    "- Do not implement retrieve as POST or with body fields like content/top_k.",
+    "- Do not implement feedback with score/comment-only payloads.",
+    "- If helper supports idempotencyKey, send it as the Idempotency-Key header on write endpoints.",
+    "- Keep write helper method-aware: ingest/feedback are POST, retrieve is GET.",
+    "- Keep secrets server-side only; never put ORBIT_API_KEY in client-side browser code.",
+  ]
+
   const flowRequirements = [
     "Implement the full memory loop: ingest -> retrieve -> assistant answer -> ingest assistant response -> optional feedback.",
     "Use endpoints /v1/ingest, /v1/retrieve, and /v1/feedback.",
     "Keep entity_id stable per user.",
+    "Feedback must attach to a retrieved memory_id; do not send entity-level score-only feedback.",
     "Use clear error handling for 401/403/429 and network failures.",
   ]
 
@@ -231,11 +262,15 @@ function buildPrompt({
   ]
 
   const references = [
-    "Repo references for style and payloads:",
-    "- examples/nodejs_orbit_api_chatbot/",
-    "- examples/http_api_clients/node_fetch.mjs",
-    "- examples/http_api_clients/python_http.py",
-    "- examples/http_api_clients/go_http.go",
+    "Reference examples (full links):",
+    `- ${orbitGithubExamplesBaseUrl}/nodejs_orbit_api_chatbot`,
+    `- ${orbitGithubExamplesBaseUrl}/http_api_clients/node_fetch.mjs`,
+    `- ${orbitGithubExamplesBaseUrl}/http_api_clients/python_http.py`,
+    `- ${orbitGithubExamplesBaseUrl}/http_api_clients/go_http.go`,
+    "Reference docs pages:",
+    `${orbitDocsUrl}/installation`,
+    `${orbitDocsUrl}/rest-endpoints`,
+    `${orbitDocsUrl}/examples`,
   ]
 
   const targetHint =
@@ -247,13 +282,22 @@ function buildPrompt({
     `You are a senior ${languageLabel(language)} engineer helping me integrate Orbit memory into a ${appTypeLabel(appType)}.`,
     targetHint,
     "",
+    "Product context:",
+    ...productContext.map((line) => `- ${line}`),
+    "",
     "Constraints:",
     ...routeInstructions.map((line) => `- ${line}`),
+    ...apiContract.map((line) => `- ${line}`),
+    ...hardValidationRules.map((line) => `- ${line}`),
     ...flowRequirements.map((line) => `- ${line}`),
     ...outputRequirements.map((line) => `- ${line}`),
     "",
     "Use this starter call pattern:",
     languageStarter(language),
+    "",
+    `Website: ${orbitWebsiteUrl}`,
+    `Docs: ${orbitDocsUrl}`,
+    `GitHub: ${orbitGithubRepoUrl}`,
     "",
     ...references,
   ].join("\n")
