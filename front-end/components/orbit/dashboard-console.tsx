@@ -45,6 +45,7 @@ import {
 const PAGE_SIZE = 10
 
 type AuthState = "checking" | "signed_out" | "signed_in"
+type OidcLoginProvider = NonNullable<OrbitDashboardSessionResponse["oidc_login_providers"]>[number]
 
 export function DashboardConsole() {
   const apiBaseUrl = getOrbitApiBaseUrl()
@@ -53,6 +54,7 @@ export function DashboardConsole() {
   const [authState, setAuthState] = useState<AuthState>("checking")
   const [authMode, setAuthMode] = useState<OrbitDashboardSessionResponse["mode"]>("password")
   const [oidcLoginPath, setOidcLoginPath] = useState("/api/dashboard/auth/oidc/start")
+  const [oidcProviders, setOidcProviders] = useState<OidcLoginProvider[]>([])
   const [authPassword, setAuthPassword] = useState("")
   const [authError, setAuthError] = useState<string | null>(null)
   const [isSigningIn, setIsSigningIn] = useState(false)
@@ -190,10 +192,24 @@ export function DashboardConsole() {
 
   const applySession = (session: OrbitDashboardSessionResponse) => {
     setAuthMode(session.mode)
+    const resolvedProviders = (session.oidc_login_providers ?? []).filter(
+      (item): item is OidcLoginProvider => Boolean(item?.id && item?.label && item?.path),
+    )
+    if (resolvedProviders.length > 0) {
+      setOidcProviders(resolvedProviders)
+      setOidcLoginPath(resolvedProviders[0].path)
+    } else {
+      setOidcProviders([])
+    }
     if (session.oidc_login_path) {
       setOidcLoginPath(session.oidc_login_path)
     }
     setAuthState(session.authenticated ? "signed_in" : "signed_out")
+  }
+
+  const handleOidcSignIn = (path: string) => {
+    setAuthError(null)
+    window.location.assign(path)
   }
 
   const handleSignIn = async () => {
@@ -204,8 +220,8 @@ export function DashboardConsole() {
       return
     }
     if (authMode === "oidc") {
-      setAuthError(null)
-      window.location.assign(oidcLoginPath || "/api/dashboard/auth/oidc/start")
+      const defaultProviderPath = oidcProviders[0]?.path || oidcLoginPath || "/api/dashboard/auth/oidc/start"
+      handleOidcSignIn(defaultProviderPath)
       return
     }
 
@@ -471,9 +487,20 @@ export function DashboardConsole() {
                 <p className="text-xs text-muted-foreground">
                   Sign in with your OIDC identity provider. Orbit mints tenant-scoped short-lived JWTs server-side.
                 </p>
-                <Button onClick={handleSignIn} disabled={authState === "checking"}>
-                  Continue with SSO
-                </Button>
+                <div className="flex flex-wrap gap-3">
+                  {(oidcProviders.length > 0
+                    ? oidcProviders
+                    : [{ id: "sso", label: "Continue with SSO", path: oidcLoginPath }]
+                  ).map((provider) => (
+                    <Button
+                      key={provider.id}
+                      onClick={() => handleOidcSignIn(provider.path)}
+                      disabled={authState === "checking"}
+                    >
+                      {provider.label}
+                    </Button>
+                  ))}
+                </div>
               </>
             ) : (
               <div className="border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
@@ -840,6 +867,9 @@ function describeAuthError(code: string): string {
   }
   if (normalized === "oidc_disabled") {
     return "OIDC login path was called while OIDC mode is disabled."
+  }
+  if (normalized === "oidc_config_invalid") {
+    return "OIDC provider configuration is incomplete or invalid."
   }
   return "Authentication flow failed. Retry sign-in."
 }

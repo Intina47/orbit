@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from "next/server"
 
 import {
   DASHBOARD_OIDC_NONCE_COOKIE_NAME,
+  DASHBOARD_OIDC_PROVIDER_COOKIE_NAME,
   DASHBOARD_OIDC_STATE_COOKIE_NAME,
   DASHBOARD_OIDC_VERIFIER_COOKIE_NAME,
   DASHBOARD_SESSION_COOKIE_NAME,
   createDashboardSessionToken,
+  dashboardLoginConfigError,
   exchangeOidcCodeForPrincipal,
   getDashboardAuthMode,
   getDashboardOidcClearCookieOptions,
@@ -24,6 +26,13 @@ export async function GET(request: NextRequest) {
       headers: { "Cache-Control": "no-store" },
     })
   }
+  const configError = dashboardLoginConfigError()
+  if (configError) {
+    logDashboardAuthEvent("dashboard_oidc_callback_config_error", request, {
+      detail: configError,
+    })
+    return redirectToDashboard(request, "oidc_config_invalid")
+  }
 
   const callbackUrl = new URL(request.url)
   const upstreamError = callbackUrl.searchParams.get("error")?.trim()
@@ -34,9 +43,12 @@ export async function GET(request: NextRequest) {
 
   const returnedState = callbackUrl.searchParams.get("state")?.trim() ?? ""
   const code = callbackUrl.searchParams.get("code")?.trim() ?? ""
+  const returnedProvider = callbackUrl.searchParams.get("provider")?.trim().toLowerCase() ?? ""
   const expectedState = request.cookies.get(DASHBOARD_OIDC_STATE_COOKIE_NAME)?.value?.trim() ?? ""
   const codeVerifier = request.cookies.get(DASHBOARD_OIDC_VERIFIER_COOKIE_NAME)?.value?.trim() ?? ""
   const expectedNonce = request.cookies.get(DASHBOARD_OIDC_NONCE_COOKIE_NAME)?.value?.trim() ?? ""
+  const expectedProvider = request.cookies.get(DASHBOARD_OIDC_PROVIDER_COOKIE_NAME)?.value?.trim().toLowerCase() ?? ""
+  const providerId = returnedProvider || expectedProvider
   if (
     !returnedState
     || !expectedState
@@ -44,6 +56,8 @@ export async function GET(request: NextRequest) {
     || !code
     || !codeVerifier
     || !expectedNonce
+    || !providerId
+    || (returnedProvider && expectedProvider && returnedProvider !== expectedProvider)
   ) {
     logDashboardAuthEvent("dashboard_oidc_callback_state_invalid", request)
     return redirectToDashboard(request, "oidc_state_invalid")
@@ -55,6 +69,7 @@ export async function GET(request: NextRequest) {
       code,
       codeVerifier,
       expectedNonce,
+      providerId,
     })
     const response = NextResponse.redirect(new URL("/dashboard", request.url), {
       status: 307,
@@ -69,6 +84,7 @@ export async function GET(request: NextRequest) {
     logDashboardAuthEvent("dashboard_oidc_callback_success", request, {
       issuer: principal.issuer,
       subject: principal.subject,
+      auth_provider: principal.authProvider,
       tenant: principal.tenant,
     })
     return response
@@ -97,4 +113,5 @@ function clearOidcTransientCookies(response: NextResponse): void {
   response.cookies.set(DASHBOARD_OIDC_STATE_COOKIE_NAME, "", clearOptions)
   response.cookies.set(DASHBOARD_OIDC_VERIFIER_COOKIE_NAME, "", clearOptions)
   response.cookies.set(DASHBOARD_OIDC_NONCE_COOKIE_NAME, "", clearOptions)
+  response.cookies.set(DASHBOARD_OIDC_PROVIDER_COOKIE_NAME, "", clearOptions)
 }

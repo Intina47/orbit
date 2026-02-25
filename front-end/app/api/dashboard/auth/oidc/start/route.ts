@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 
 import {
   DASHBOARD_OIDC_NONCE_COOKIE_NAME,
+  DASHBOARD_OIDC_PROVIDER_COOKIE_NAME,
   DASHBOARD_OIDC_STATE_COOKIE_NAME,
   DASHBOARD_OIDC_VERIFIER_COOKIE_NAME,
   buildOidcAuthorizationRequest,
@@ -32,7 +33,8 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const authorization = await buildOidcAuthorizationRequest(request)
+    const requestedProvider = request.nextUrl.searchParams.get("provider")?.trim() || undefined
+    const authorization = await buildOidcAuthorizationRequest(request, requestedProvider)
     const response = NextResponse.redirect(authorization.authorizationUrl, {
       status: 307,
       headers: { "Cache-Control": "no-store" },
@@ -53,7 +55,14 @@ export async function GET(request: NextRequest) {
       authorization.nonce,
       cookieOptions,
     )
-    logDashboardAuthEvent("dashboard_oidc_start", request)
+    response.cookies.set(
+      DASHBOARD_OIDC_PROVIDER_COOKIE_NAME,
+      authorization.providerId,
+      cookieOptions,
+    )
+    logDashboardAuthEvent("dashboard_oidc_start", request, {
+      provider: authorization.providerId,
+    })
     return response
   } catch (error) {
     logDashboardAuthEvent("dashboard_oidc_start_failed", request, {

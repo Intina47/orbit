@@ -48,7 +48,14 @@ export type OrbitDashboardSessionResponse = {
   email?: string
   name?: string
   provider?: "password" | "oidc" | "disabled"
+  auth_provider?: string
+  picture?: string
   oidc_login_path?: string
+  oidc_login_providers?: Array<{
+    id: string
+    label: string
+    path: string
+  }>
 }
 
 const DEFAULT_PROXY_PREFIX = "/api/dashboard"

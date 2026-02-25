@@ -170,6 +170,9 @@ class OrbitApiService:
         subject = self._normalize_auth_subject(auth.subject)
         account_key = self._account_key_from_claims(claims)
         email = self._email_from_claims(claims)
+        display_name = self._display_name_from_claims(claims)
+        auth_provider = self._auth_provider_from_claims(claims)
+        avatar_url = self._avatar_url_from_claims(claims)
 
         if account_key is None:
             mapped = self._lookup_dashboard_account_mapping(
@@ -190,10 +193,16 @@ class OrbitApiService:
             auth_issuer=issuer,
             auth_subject=subject,
             email=email,
+            auth_provider=auth_provider,
+            display_name=display_name,
+            avatar_url=avatar_url,
+            last_login_at=datetime.now(UTC),
         )
         claims["account_key"] = account_key
         claims["auth_subject"] = subject
         claims["auth_issuer"] = issuer
+        if auth_provider:
+            claims["auth_provider"] = auth_provider
         return AuthContext(
             subject=account_key,
             scopes=auth.scopes,
@@ -1986,6 +1995,10 @@ class OrbitApiService:
         auth_issuer: str,
         auth_subject: str,
         email: str | None,
+        auth_provider: str | None,
+        display_name: str | None,
+        avatar_url: str | None,
+        last_login_at: datetime,
     ) -> None:
         normalized_account_key = self._normalize_account_key(account_key)
         with self._state_session_factory() as session, session.begin():
@@ -2003,7 +2016,11 @@ class OrbitApiService:
                         account_key=normalized_account_key,
                         auth_issuer=auth_issuer,
                         auth_subject=auth_subject,
+                        auth_provider=auth_provider,
                         email=email,
+                        display_name=display_name,
+                        avatar_url=avatar_url,
+                        last_login_at=last_login_at,
                         created_at=now,
                         updated_at=now,
                     )
@@ -2017,6 +2034,10 @@ class OrbitApiService:
                 )
                 raise AccountMappingError(msg)
             row.email = email or row.email
+            row.auth_provider = auth_provider or row.auth_provider
+            row.display_name = display_name or row.display_name
+            row.avatar_url = avatar_url or row.avatar_url
+            row.last_login_at = last_login_at
             row.updated_at = now
 
     @staticmethod
@@ -2492,6 +2513,62 @@ class OrbitApiService:
         if len(normalized) > 320:
             return normalized[:320]
         return normalized
+
+    @staticmethod
+    def _display_name_from_claims(claims: dict[str, Any]) -> str | None:
+        candidates = (
+            claims.get("name"),
+            claims.get("preferred_username"),
+            claims.get("login"),
+        )
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            normalized = str(candidate).strip()
+            if not normalized:
+                continue
+            if len(normalized) > 255:
+                return normalized[:255]
+            return normalized
+        return None
+
+    @staticmethod
+    def _auth_provider_from_claims(claims: dict[str, Any]) -> str | None:
+        candidates = (
+            claims.get("auth_provider"),
+            claims.get("idp"),
+            claims.get("provider"),
+        )
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            normalized = str(candidate).strip().lower()
+            if not normalized:
+                continue
+            if len(normalized) > 64:
+                return normalized[:64]
+            return normalized
+        return None
+
+    @staticmethod
+    def _avatar_url_from_claims(claims: dict[str, Any]) -> str | None:
+        candidates = (
+            claims.get("picture"),
+            claims.get("avatar_url"),
+        )
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            normalized = str(candidate).strip()
+            if not normalized:
+                continue
+            lowered = normalized.lower()
+            if not (lowered.startswith("http://") or lowered.startswith("https://")):
+                continue
+            if len(normalized) > 1024:
+                return normalized[:1024]
+            return normalized
+        return None
 
     @staticmethod
     def _provision_dashboard_account_key(*, issuer: str, subject: str) -> str:

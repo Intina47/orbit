@@ -14,12 +14,33 @@ export const DASHBOARD_SESSION_COOKIE_NAME = "orbit_dashboard_session"
 export const DASHBOARD_OIDC_STATE_COOKIE_NAME = "orbit_dashboard_oidc_state"
 export const DASHBOARD_OIDC_VERIFIER_COOKIE_NAME = "orbit_dashboard_oidc_verifier"
 export const DASHBOARD_OIDC_NONCE_COOKIE_NAME = "orbit_dashboard_oidc_nonce"
+export const DASHBOARD_OIDC_PROVIDER_COOKIE_NAME = "orbit_dashboard_oidc_provider"
 
 const NO_STORE_HEADERS = {
   "Cache-Control": "no-store",
 }
 
 type SessionProvider = "password" | "oidc" | "disabled"
+
+type OidcProviderProtocol = "oidc" | "oauth2"
+type OidcProviderId = "google" | "github" | "sso"
+
+type OidcProviderConfig = {
+  id: OidcProviderId
+  label: string
+  protocol: OidcProviderProtocol
+  issuer: string
+  clientId: string
+  clientSecret: string
+  scopes: string[]
+  redirectUri?: string
+  prompt?: string
+  tenantClaimKeys: string[]
+  authorizationEndpoint?: string
+  tokenEndpoint?: string
+  userinfoEndpoint?: string
+  emailEndpoint?: string
+}
 
 type SessionPayload = {
   sub: string
@@ -30,6 +51,8 @@ type SessionPayload = {
   email?: string
   name?: string
   tenant?: string
+  auth_provider?: string
+  picture?: string
 }
 
 type OidcDiscoveryDocument = {
@@ -63,6 +86,14 @@ export type DashboardPrincipal = {
   email?: string
   name?: string
   tenant?: string
+  authProvider?: string
+  picture?: string
+}
+
+export type DashboardOidcLoginProvider = {
+  id: string
+  label: string
+  path: string
 }
 
 export type DashboardSessionStatus = {
@@ -72,7 +103,10 @@ export type DashboardSessionStatus = {
   email?: string
   name?: string
   provider?: SessionProvider
+  auth_provider?: string
+  picture?: string
   oidc_login_path?: string
+  oidc_login_providers?: DashboardOidcLoginProvider[]
 }
 
 export type ProxyTokenResult = {
@@ -95,13 +129,13 @@ export type ProxyTokenResolution =
     }
 
 const loginThrottleStore = new Map<string, LoginThrottleState>()
-let oidcDiscoveryCache:
-  | {
-      issuer: string
-      fetchedAtMs: number
-      document: OidcDiscoveryDocument
-    }
-  | null = null
+const oidcDiscoveryCache = new Map<
+  string,
+  {
+    fetchedAtMs: number
+    document: OidcDiscoveryDocument
+  }
+>()
 
 export function getDashboardAuthMode(): DashboardAuthMode {
   const raw = process.env.ORBIT_DASHBOARD_AUTH_MODE?.trim().toLowerCase()
@@ -147,14 +181,25 @@ export function dashboardOidcConfigError(): string | null {
   if (getDashboardAuthMode() !== "oidc") {
     return null
   }
-  if (!readOidcIssuerUrl()) {
-    return "OIDC mode requires ORBIT_DASHBOARD_OIDC_ISSUER_URL."
+  const providers = resolveConfiguredOidcProviders()
+  if (providers.length === 0) {
+    return (
+      "OIDC mode requires provider config. Set Google with "
+      + "ORBIT_DASHBOARD_OIDC_GOOGLE_CLIENT_ID/SECRET, GitHub with "
+      + "ORBIT_DASHBOARD_OIDC_GITHUB_CLIENT_ID/SECRET, or legacy "
+      + "ORBIT_DASHBOARD_OIDC_ISSUER_URL/CLIENT_ID/CLIENT_SECRET."
+    )
   }
-  if (!readOidcClientId()) {
-    return "OIDC mode requires ORBIT_DASHBOARD_OIDC_CLIENT_ID."
-  }
-  if (!readOidcClientSecret()) {
-    return "OIDC mode requires ORBIT_DASHBOARD_OIDC_CLIENT_SECRET."
+  for (const provider of providers) {
+    if (!provider.clientId) {
+      return `OIDC provider "${provider.id}" requires a client ID.`
+    }
+    if (!provider.clientSecret) {
+      return `OIDC provider "${provider.id}" requires a client secret.`
+    }
+    if (provider.protocol === "oidc" && !provider.issuer) {
+      return `OIDC provider "${provider.id}" requires an issuer URL.`
+    }
   }
   return null
 }
@@ -177,6 +222,8 @@ export function buildDashboardSessionStatus(
   request: NextRequest,
 ): DashboardSessionStatus {
   const mode = getDashboardAuthMode()
+  const oidcProviders = mode === "oidc" ? buildOidcLoginProviders(request) : []
+  const primaryOidcPath = oidcProviders[0]?.path
   if (mode === "disabled") {
     return {
       authenticated: true,
@@ -191,7 +238,8 @@ export function buildDashboardSessionStatus(
     return {
       authenticated: false,
       mode,
-      oidc_login_path: mode === "oidc" ? "/api/dashboard/auth/oidc/start" : undefined,
+      oidc_login_path: primaryOidcPath,
+      oidc_login_providers: oidcProviders,
     }
   }
   return {
@@ -201,8 +249,20 @@ export function buildDashboardSessionStatus(
     email: principal.email,
     name: principal.name,
     provider: principal.provider,
-    oidc_login_path: mode === "oidc" ? "/api/dashboard/auth/oidc/start" : undefined,
+    auth_provider: principal.authProvider,
+    picture: principal.picture,
+    oidc_login_path: primaryOidcPath,
+    oidc_login_providers: oidcProviders,
   }
+}
+
+function buildOidcLoginProviders(request: NextRequest): DashboardOidcLoginProvider[] {
+  const configured = resolveConfiguredOidcProviders(request)
+  return configured.map((provider) => ({
+    id: provider.id,
+    label: provider.label,
+    path: `/api/dashboard/auth/oidc/start?provider=${encodeURIComponent(provider.id)}`,
+  }))
 }
 
 export function requireDashboardSession(request: NextRequest): NextResponse | null {
@@ -257,6 +317,8 @@ export function createDashboardSessionToken(principal: DashboardPrincipal): stri
     email: principal.email,
     name: principal.name,
     tenant: principal.tenant,
+    auth_provider: principal.authProvider,
+    picture: principal.picture,
     iat: now,
     exp: now + readSessionTtlSeconds(),
   }
@@ -335,15 +397,31 @@ export function enforceDashboardOrigin(request: NextRequest): NextResponse | nul
     return null
   }
 
-  const origin = request.headers.get("origin")?.trim() ?? ""
+  const originHeader = request.headers.get("origin")?.trim() ?? ""
+  const refererHeader = request.headers.get("referer")?.trim() ?? ""
+  const origin = extractRequestOrigin(originHeader, refererHeader)
   if (!origin) {
-    return null
+    if (readAllowMissingOriginForMutations()) {
+      return null
+    }
+    logDashboardAuthEvent("dashboard_origin_missing", request, {
+      origin_header: originHeader || undefined,
+      referer_header: refererHeader || undefined,
+    })
+    return NextResponse.json(
+      { detail: "Origin or Referer header is required for dashboard mutation endpoints." },
+      { status: 403, headers: NO_STORE_HEADERS },
+    )
   }
   const allowed = readAllowedOrigins(request)
   if (allowed.has(origin)) {
     return null
   }
-  logDashboardAuthEvent("dashboard_origin_denied", request, { origin })
+  logDashboardAuthEvent("dashboard_origin_denied", request, {
+    origin,
+    origin_header: originHeader || undefined,
+    referer_header: refererHeader || undefined,
+  })
   return NextResponse.json(
     { detail: "Request origin is not allowed for dashboard mutation endpoints." },
     { status: 403, headers: NO_STORE_HEADERS },
@@ -432,47 +510,61 @@ export function logDashboardAuthEvent(
 
 export async function buildOidcAuthorizationRequest(
   request: NextRequest,
+  providerHint?: string,
 ): Promise<{
   authorizationUrl: string
   state: string
   nonce: string
   codeVerifier: string
+  providerId: string
 }> {
   const configError = dashboardOidcConfigError()
   if (configError) {
     throw new Error(configError)
   }
 
-  const discovery = await resolveOidcDiscovery()
+  const provider = resolveOidcProviderConfig({
+    request,
+    providerHint,
+  })
+  const authorizationEndpoint = provider.protocol === "oidc"
+    ? (await resolveOidcDiscovery(provider)).authorization_endpoint
+    : requireProviderEndpoint(provider.authorizationEndpoint, "authorization endpoint")
   const state = randomToken()
   const nonce = randomToken()
   const codeVerifier = randomVerifier()
   const codeChallenge = toBase64Url(
     createHash("sha256").update(codeVerifier).digest(),
   )
-  const redirectUri = resolveOidcRedirectUri(request)
-  const scopes = readOidcScopes()
+  const redirectUri = resolveOidcRedirectUri(request, provider)
+  const scopes = provider.scopes
 
   const params = new URLSearchParams()
-  params.set("client_id", readOidcClientId())
+  params.set("client_id", provider.clientId)
   params.set("redirect_uri", redirectUri)
   params.set("response_type", "code")
   params.set("scope", scopes.join(" "))
   params.set("state", state)
-  params.set("nonce", nonce)
   params.set("code_challenge", codeChallenge)
   params.set("code_challenge_method", "S256")
+  if (provider.protocol === "oidc") {
+    params.set("nonce", nonce)
+  }
 
-  const prompt = process.env.ORBIT_DASHBOARD_OIDC_PROMPT?.trim()
+  const prompt = provider.prompt
   if (prompt) {
     params.set("prompt", prompt)
   }
+  if (provider.id === "github") {
+    params.set("allow_signup", "true")
+  }
 
   return {
-    authorizationUrl: `${discovery.authorization_endpoint}?${params.toString()}`,
+    authorizationUrl: `${authorizationEndpoint}?${params.toString()}`,
     state,
     nonce,
     codeVerifier,
+    providerId: provider.id,
   }
 }
 
@@ -481,19 +573,32 @@ export async function exchangeOidcCodeForPrincipal(options: {
   code: string
   codeVerifier: string
   expectedNonce?: string
+  providerId: string
 }): Promise<DashboardPrincipal> {
   const configError = dashboardOidcConfigError()
   if (configError) {
     throw new Error(configError)
   }
 
-  const discovery = await resolveOidcDiscovery()
-  const redirectUri = resolveOidcRedirectUri(options.request)
+  const provider = resolveOidcProviderConfig({
+    request: options.request,
+    providerHint: options.providerId,
+  })
+  if (provider.protocol === "oauth2" && provider.id === "github") {
+    return exchangeGithubCodeForPrincipal({
+      provider,
+      code: options.code,
+      codeVerifier: options.codeVerifier,
+      request: options.request,
+    })
+  }
+  const discovery = await resolveOidcDiscovery(provider)
+  const redirectUri = resolveOidcRedirectUri(options.request, provider)
 
   const tokenForm = new URLSearchParams()
   tokenForm.set("grant_type", "authorization_code")
-  tokenForm.set("client_id", readOidcClientId())
-  tokenForm.set("client_secret", readOidcClientSecret())
+  tokenForm.set("client_id", provider.clientId)
+  tokenForm.set("client_secret", provider.clientSecret)
   tokenForm.set("code", options.code)
   tokenForm.set("redirect_uri", redirectUri)
   tokenForm.set("code_verifier", options.codeVerifier)
@@ -525,24 +630,28 @@ export async function exchangeOidcCodeForPrincipal(options: {
     discovery,
     tokenPayload,
     expectedNonce: options.expectedNonce,
+    provider,
   })
 
   const subject = normalizeClaimValue(claims.sub)
   if (!subject) {
     throw new Error("OIDC claims missing subject.")
   }
-  const issuer = normalizeClaimValue(claims.iss) || discovery.issuer
+  const issuer = normalizeClaimValue(claims.iss) || discovery.issuer || provider.issuer
   const email = normalizeOptionalClaim(claims.email)
   const name = normalizeOptionalClaim(claims.name)
-  const tenant = normalizeTenantClaim(claims)
+  const tenant = normalizeTenantClaim(claims, provider)
+  const picture = normalizeOptionalUrlClaim(claims.picture)
 
   return {
     subject,
     issuer,
     provider: "oidc",
+    authProvider: provider.id,
     ...(email ? { email } : {}),
     ...(name ? { name } : {}),
     ...(tenant ? { tenant } : {}),
+    ...(picture ? { picture } : {}),
   }
 }
 
@@ -624,6 +733,8 @@ function readPrincipalFromSession(request: NextRequest): DashboardPrincipal | nu
     ...(payload.email ? { email: payload.email } : {}),
     ...(payload.name ? { name: payload.name } : {}),
     ...(payload.tenant ? { tenant: payload.tenant } : {}),
+    ...(payload.auth_provider ? { authProvider: payload.auth_provider } : {}),
+    ...(payload.picture ? { picture: payload.picture } : {}),
   }
 }
 
@@ -675,6 +786,8 @@ function verifyDashboardSessionToken(token: string): SessionPayload | null {
     ...(payload.email ? { email: payload.email } : {}),
     ...(payload.name ? { name: payload.name } : {}),
     ...(payload.tenant ? { tenant: payload.tenant } : {}),
+    ...(payload.auth_provider ? { auth_provider: payload.auth_provider } : {}),
+    ...(payload.picture ? { picture: payload.picture } : {}),
   }
 }
 
@@ -707,6 +820,9 @@ function signProxyJwt(options: {
     auth_issuer: options.principal.issuer,
     auth_type: "dashboard_proxy",
     ...(options.principal.email ? { email: options.principal.email } : {}),
+    ...(options.principal.name ? { name: options.principal.name } : {}),
+    ...(options.principal.picture ? { picture: options.principal.picture } : {}),
+    ...(options.principal.authProvider ? { auth_provider: options.principal.authProvider } : {}),
     ...(options.principal.tenant ? { tenant: options.principal.tenant } : {}),
     jti: randomToken(),
   }
@@ -732,15 +848,17 @@ function deriveAccountKey(principal: DashboardPrincipal): string {
   return `acct_${digest.slice(0, 24)}`
 }
 
-async function resolveOidcDiscovery(): Promise<OidcDiscoveryDocument> {
-  const issuerUrl = readOidcIssuerUrl()
+async function resolveOidcDiscovery(
+  provider: OidcProviderConfig,
+): Promise<OidcDiscoveryDocument> {
+  const issuerUrl = provider.issuer.trim()
+  if (!issuerUrl) {
+    throw new Error(`OIDC provider "${provider.id}" is missing issuer URL.`)
+  }
   const now = Date.now()
-  if (
-    oidcDiscoveryCache !== null
-    && oidcDiscoveryCache.issuer === issuerUrl
-    && now - oidcDiscoveryCache.fetchedAtMs < OIDC_DISCOVERY_CACHE_TTL_MS
-  ) {
-    return oidcDiscoveryCache.document
+  const cached = oidcDiscoveryCache.get(issuerUrl)
+  if (cached && now - cached.fetchedAtMs < OIDC_DISCOVERY_CACHE_TTL_MS) {
+    return cached.document
   }
 
   const discoveryUrl = issuerUrl.endsWith("/.well-known/openid-configuration")
@@ -756,7 +874,7 @@ async function resolveOidcDiscovery(): Promise<OidcDiscoveryDocument> {
   if (!response.ok) {
     const body = await response.text()
     throw new Error(
-      `OIDC discovery failed: ${response.status} ${body.slice(0, 200)}`,
+      `OIDC discovery failed (${provider.id}): ${response.status} ${body.slice(0, 200)}`,
     )
   }
 
@@ -774,11 +892,10 @@ async function resolveOidcDiscovery(): Promise<OidcDiscoveryDocument> {
       ? { userinfo_endpoint: payload.userinfo_endpoint }
       : {}),
   }
-  oidcDiscoveryCache = {
-    issuer: issuerUrl,
+  oidcDiscoveryCache.set(issuerUrl, {
     fetchedAtMs: now,
     document,
-  }
+  })
   return document
 }
 
@@ -786,6 +903,7 @@ async function resolveOidcClaims(options: {
   discovery: OidcDiscoveryDocument
   tokenPayload: OidcTokenResponse
   expectedNonce?: string
+  provider: OidcProviderConfig
 }): Promise<Record<string, unknown>> {
   const accessToken = options.tokenPayload.access_token?.trim()
   const idToken = options.tokenPayload.id_token?.trim()
@@ -802,6 +920,7 @@ async function resolveOidcClaims(options: {
         throw new Error("OIDC nonce validation failed.")
       }
     }
+    validateIdTokenBasicClaims(idTokenClaims, options)
   }
 
   if (options.discovery.userinfo_endpoint && accessToken) {
@@ -816,6 +935,11 @@ async function resolveOidcClaims(options: {
     if (userInfoResponse.ok) {
       try {
         const userInfoClaims = (await userInfoResponse.json()) as Record<string, unknown>
+        const idTokenSubject = normalizeClaimValue(idTokenClaims?.sub)
+        const userInfoSubject = normalizeClaimValue(userInfoClaims.sub)
+        if (idTokenSubject && userInfoSubject && idTokenSubject !== userInfoSubject) {
+          throw new Error("OIDC subject mismatch between id_token and userinfo response.")
+        }
         return {
           ...(idTokenClaims ?? {}),
           ...userInfoClaims,
@@ -827,9 +951,209 @@ async function resolveOidcClaims(options: {
   }
 
   if (!idTokenClaims) {
-    throw new Error("OIDC token response missing both usable userinfo and id_token.")
+    throw new Error(
+      `OIDC token response missing both usable userinfo and id_token for provider ${options.provider.id}.`,
+    )
+  }
+  if (!readAllowUnsignedIdTokenFallback()) {
+    throw new Error(
+      "OIDC userinfo endpoint is unavailable. For security, unsigned id_token fallback is disabled "
+      + "by default. Configure a provider with userinfo support or set "
+      + "ORBIT_DASHBOARD_OIDC_ALLOW_UNSIGNED_ID_TOKEN_FALLBACK=true if you accept this risk.",
+    )
   }
   return idTokenClaims
+}
+
+function validateIdTokenBasicClaims(
+  idTokenClaims: Record<string, unknown>,
+  options: {
+    discovery: OidcDiscoveryDocument
+    provider: OidcProviderConfig
+  },
+): void {
+  const issuerClaim = normalizeClaimValue(idTokenClaims.iss)
+  if (issuerClaim && issuerClaim !== options.discovery.issuer) {
+    throw new Error("OIDC id_token issuer claim did not match discovered issuer.")
+  }
+  const audClaim = idTokenClaims.aud
+  if (typeof audClaim === "string") {
+    const normalizedAud = normalizeClaimValue(audClaim)
+    if (normalizedAud && normalizedAud !== options.provider.clientId) {
+      throw new Error("OIDC id_token audience claim did not match client_id.")
+    }
+    return
+  }
+  if (!Array.isArray(audClaim)) {
+    return
+  }
+  const audiences = audClaim
+    .map((value) => normalizeClaimValue(value))
+    .filter(Boolean)
+  if (audiences.length > 0 && !audiences.includes(options.provider.clientId)) {
+    throw new Error("OIDC id_token audience claim did not include client_id.")
+  }
+}
+
+async function exchangeGithubCodeForPrincipal(options: {
+  provider: OidcProviderConfig
+  request: NextRequest
+  code: string
+  codeVerifier: string
+}): Promise<DashboardPrincipal> {
+  const redirectUri = resolveOidcRedirectUri(options.request, options.provider)
+  const tokenEndpoint = requireProviderEndpoint(
+    options.provider.tokenEndpoint,
+    "token endpoint",
+  )
+
+  const tokenForm = new URLSearchParams()
+  tokenForm.set("client_id", options.provider.clientId)
+  tokenForm.set("client_secret", options.provider.clientSecret)
+  tokenForm.set("code", options.code)
+  tokenForm.set("redirect_uri", redirectUri)
+  tokenForm.set("code_verifier", options.codeVerifier)
+
+  const tokenResponse = await fetch(tokenEndpoint, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: tokenForm.toString(),
+    cache: "no-store",
+  })
+  if (!tokenResponse.ok) {
+    const body = await tokenResponse.text()
+    throw new Error(
+      `GitHub token exchange failed: ${tokenResponse.status} ${body.slice(0, 200)}`,
+    )
+  }
+
+  let tokenPayload: OidcTokenResponse
+  try {
+    tokenPayload = (await tokenResponse.json()) as OidcTokenResponse
+  } catch {
+    throw new Error("GitHub token response was not valid JSON.")
+  }
+  const accessToken = tokenPayload.access_token?.trim()
+  if (!accessToken) {
+    throw new Error("GitHub token response missing access_token.")
+  }
+
+  const claims = await resolveGithubUserClaims(options.provider, accessToken)
+  const subject = normalizeGithubSubject(claims)
+  if (!subject) {
+    throw new Error("GitHub userinfo payload missing id/login.")
+  }
+
+  const emailFromUser = normalizeOptionalClaim(claims.email)
+  const email = emailFromUser ?? (await resolveGithubPrimaryEmail(options.provider, accessToken))
+  const name = normalizeOptionalClaim(claims.name) || normalizeOptionalClaim(claims.login)
+  const picture = normalizeOptionalUrlClaim(claims.avatar_url)
+
+  return {
+    subject,
+    issuer: options.provider.issuer,
+    provider: "oidc",
+    authProvider: options.provider.id,
+    ...(email ? { email } : {}),
+    ...(name ? { name } : {}),
+    ...(picture ? { picture } : {}),
+  }
+}
+
+async function resolveGithubUserClaims(
+  provider: OidcProviderConfig,
+  accessToken: string,
+): Promise<Record<string, unknown>> {
+  const userinfoEndpoint = requireProviderEndpoint(
+    provider.userinfoEndpoint,
+    "userinfo endpoint",
+  )
+  const response = await fetch(userinfoEndpoint, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    cache: "no-store",
+  })
+  if (!response.ok) {
+    const body = await response.text()
+    throw new Error(
+      `GitHub userinfo request failed: ${response.status} ${body.slice(0, 200)}`,
+    )
+  }
+  try {
+    return (await response.json()) as Record<string, unknown>
+  } catch {
+    throw new Error("GitHub userinfo payload was not valid JSON.")
+  }
+}
+
+async function resolveGithubPrimaryEmail(
+  provider: OidcProviderConfig,
+  accessToken: string,
+): Promise<string | undefined> {
+  const emailEndpoint = provider.emailEndpoint?.trim()
+  if (!emailEndpoint) {
+    return undefined
+  }
+  const response = await fetch(emailEndpoint, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    cache: "no-store",
+  })
+  if (!response.ok) {
+    return undefined
+  }
+  let payload: unknown
+  try {
+    payload = await response.json()
+  } catch {
+    return undefined
+  }
+  if (!Array.isArray(payload)) {
+    return undefined
+  }
+  const candidates = payload
+    .map((item) => (typeof item === "object" && item !== null ? item : {}))
+    .map((item) => ({
+      email: normalizeOptionalClaim((item as Record<string, unknown>).email),
+      primary: Boolean((item as Record<string, unknown>).primary),
+      verified: Boolean((item as Record<string, unknown>).verified),
+    }))
+    .filter((item) => Boolean(item.email))
+  const primaryVerified = candidates.find((item) => item.primary && item.verified)
+  if (primaryVerified?.email) {
+    return primaryVerified.email
+  }
+  const verified = candidates.find((item) => item.verified)
+  if (verified?.email) {
+    return verified.email
+  }
+  return candidates[0]?.email
+}
+
+function normalizeGithubSubject(claims: Record<string, unknown>): string {
+  const numericId = claims.id
+  if (typeof numericId === "number" && Number.isFinite(numericId)) {
+    return `github:${Math.trunc(numericId)}`
+  }
+  if (typeof numericId === "string" && numericId.trim()) {
+    return `github:${numericId.trim()}`
+  }
+  const login = normalizeClaimValue(claims.login)
+  if (!login) {
+    return ""
+  }
+  return `github_login:${login}`
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -886,11 +1210,25 @@ function normalizeOptionalClaim(value: unknown): string | undefined {
   return normalized || undefined
 }
 
-function normalizeTenantClaim(claims: Record<string, unknown>): string | undefined {
-  const customKeys = (process.env.ORBIT_DASHBOARD_OIDC_TENANT_CLAIMS?.trim() ?? "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean)
+function normalizeOptionalUrlClaim(value: unknown): string | undefined {
+  const normalized = normalizeClaimValue(value)
+  if (!normalized) {
+    return undefined
+  }
+  if (!normalized.startsWith("http://") && !normalized.startsWith("https://")) {
+    return undefined
+  }
+  if (normalized.length > 1024) {
+    return normalized.slice(0, 1024)
+  }
+  return normalized
+}
+
+function normalizeTenantClaim(
+  claims: Record<string, unknown>,
+  provider: OidcProviderConfig,
+): string | undefined {
+  const customKeys = provider.tenantClaimKeys
   const candidates: unknown[] = customKeys.map((key) => claims[key])
   candidates.push(
     claims.tid,
@@ -909,32 +1247,179 @@ function normalizeTenantClaim(claims: Record<string, unknown>): string | undefin
   return undefined
 }
 
-function resolveOidcRedirectUri(request: NextRequest): string {
-  const configured = process.env.ORBIT_DASHBOARD_OIDC_REDIRECT_URI?.trim()
+function resolveOidcRedirectUri(
+  request: NextRequest,
+  provider: OidcProviderConfig,
+): string {
+  const configured = provider.redirectUri?.trim() || process.env.ORBIT_DASHBOARD_OIDC_REDIRECT_URI?.trim()
   if (configured) {
     return configured
   }
   return `${request.nextUrl.origin}/api/dashboard/auth/oidc/callback`
 }
 
-function readOidcIssuerUrl(): string {
-  return process.env.ORBIT_DASHBOARD_OIDC_ISSUER_URL?.trim() ?? ""
+function resolveOidcProviderConfig(options: {
+  request: NextRequest
+  providerHint?: string
+}): OidcProviderConfig {
+  const configured = resolveConfiguredOidcProviders(options.request)
+  if (configured.length === 0) {
+    throw new Error(
+      "OIDC mode is enabled but no providers are configured.",
+    )
+  }
+  const normalizedHint = options.providerHint?.trim().toLowerCase()
+  if (!normalizedHint) {
+    return configured[0]
+  }
+  const selected = configured.find((provider) => provider.id === normalizedHint)
+  if (!selected) {
+    throw new Error(`Unsupported OIDC provider "${normalizedHint}".`)
+  }
+  return selected
 }
 
-function readOidcClientId(): string {
-  return process.env.ORBIT_DASHBOARD_OIDC_CLIENT_ID?.trim() ?? ""
+function resolveConfiguredOidcProviders(
+  request?: NextRequest,
+): OidcProviderConfig[] {
+  const providers: OidcProviderConfig[] = []
+  const google = readGoogleProviderConfig(request)
+  if (google !== null) {
+    providers.push(google)
+  }
+  const github = readGithubProviderConfig(request)
+  if (github !== null) {
+    providers.push(github)
+  }
+  if (providers.length > 0) {
+    return providers
+  }
+  const legacy = readLegacyOidcProviderConfig(request)
+  if (legacy !== null) {
+    providers.push(legacy)
+  }
+  return providers
 }
 
-function readOidcClientSecret(): string {
-  return process.env.ORBIT_DASHBOARD_OIDC_CLIENT_SECRET?.trim() ?? ""
+function readGoogleProviderConfig(
+  request?: NextRequest,
+): OidcProviderConfig | null {
+  const clientId = process.env.ORBIT_DASHBOARD_OIDC_GOOGLE_CLIENT_ID?.trim() ?? ""
+  const clientSecret = process.env.ORBIT_DASHBOARD_OIDC_GOOGLE_CLIENT_SECRET?.trim() ?? ""
+  if (!clientId && !clientSecret) {
+    return null
+  }
+  const issuer = process.env.ORBIT_DASHBOARD_OIDC_GOOGLE_ISSUER_URL?.trim() || "https://accounts.google.com"
+  return {
+    id: "google",
+    label: "Continue with Google",
+    protocol: "oidc",
+    issuer,
+    clientId,
+    clientSecret,
+    scopes: readScopeEnv("ORBIT_DASHBOARD_OIDC_GOOGLE_SCOPES", ["openid", "profile", "email"]),
+    redirectUri: process.env.ORBIT_DASHBOARD_OIDC_GOOGLE_REDIRECT_URI?.trim() || resolveSharedRedirectUri(request),
+    prompt: process.env.ORBIT_DASHBOARD_OIDC_GOOGLE_PROMPT?.trim() || "select_account",
+    tenantClaimKeys: readTenantClaimKeys("ORBIT_DASHBOARD_OIDC_GOOGLE_TENANT_CLAIMS"),
+  }
 }
 
-function readOidcScopes(): string[] {
-  const raw = process.env.ORBIT_DASHBOARD_OIDC_SCOPES?.trim()
+function readGithubProviderConfig(
+  request?: NextRequest,
+): OidcProviderConfig | null {
+  const clientId = process.env.ORBIT_DASHBOARD_OIDC_GITHUB_CLIENT_ID?.trim() ?? ""
+  const clientSecret = process.env.ORBIT_DASHBOARD_OIDC_GITHUB_CLIENT_SECRET?.trim() ?? ""
+  if (!clientId && !clientSecret) {
+    return null
+  }
+  return {
+    id: "github",
+    label: "Continue with GitHub",
+    protocol: "oauth2",
+    issuer: process.env.ORBIT_DASHBOARD_OIDC_GITHUB_ISSUER_URL?.trim() || "https://github.com",
+    clientId,
+    clientSecret,
+    scopes: readScopeEnv("ORBIT_DASHBOARD_OIDC_GITHUB_SCOPES", ["read:user", "user:email"]),
+    redirectUri: process.env.ORBIT_DASHBOARD_OIDC_GITHUB_REDIRECT_URI?.trim() || resolveSharedRedirectUri(request),
+    prompt: undefined,
+    tenantClaimKeys: readTenantClaimKeys("ORBIT_DASHBOARD_OIDC_GITHUB_TENANT_CLAIMS"),
+    authorizationEndpoint: process.env.ORBIT_DASHBOARD_OIDC_GITHUB_AUTHORIZATION_ENDPOINT?.trim()
+      || "https://github.com/login/oauth/authorize",
+    tokenEndpoint: process.env.ORBIT_DASHBOARD_OIDC_GITHUB_TOKEN_ENDPOINT?.trim()
+      || "https://github.com/login/oauth/access_token",
+    userinfoEndpoint: process.env.ORBIT_DASHBOARD_OIDC_GITHUB_USERINFO_ENDPOINT?.trim()
+      || "https://api.github.com/user",
+    emailEndpoint: process.env.ORBIT_DASHBOARD_OIDC_GITHUB_EMAILS_ENDPOINT?.trim()
+      || "https://api.github.com/user/emails",
+  }
+}
+
+function readLegacyOidcProviderConfig(
+  request?: NextRequest,
+): OidcProviderConfig | null {
+  const issuer = process.env.ORBIT_DASHBOARD_OIDC_ISSUER_URL?.trim() ?? ""
+  const clientId = process.env.ORBIT_DASHBOARD_OIDC_CLIENT_ID?.trim() ?? ""
+  const clientSecret = process.env.ORBIT_DASHBOARD_OIDC_CLIENT_SECRET?.trim() ?? ""
+  if (!issuer && !clientId && !clientSecret) {
+    return null
+  }
+  return {
+    id: "sso",
+    label: "Continue with SSO",
+    protocol: "oidc",
+    issuer,
+    clientId,
+    clientSecret,
+    scopes: readScopeEnv("ORBIT_DASHBOARD_OIDC_SCOPES", ["openid", "profile", "email"]),
+    redirectUri: process.env.ORBIT_DASHBOARD_OIDC_REDIRECT_URI?.trim() || resolveSharedRedirectUri(request),
+    prompt: process.env.ORBIT_DASHBOARD_OIDC_PROMPT?.trim(),
+    tenantClaimKeys: readTenantClaimKeys("ORBIT_DASHBOARD_OIDC_TENANT_CLAIMS"),
+  }
+}
+
+function resolveSharedRedirectUri(request?: NextRequest): string | undefined {
+  const configured = process.env.ORBIT_DASHBOARD_OIDC_REDIRECT_URI?.trim()
+  if (configured) {
+    return configured
+  }
+  if (!request) {
+    return undefined
+  }
+  return `${request.nextUrl.origin}/api/dashboard/auth/oidc/callback`
+}
+
+function readScopeEnv(envName: string, fallback: string[]): string[] {
+  const raw = process.env[envName]?.trim()
   if (!raw) {
-    return ["openid", "profile", "email"]
+    return fallback
   }
   return normalizeScopes(raw.split(/\s+/))
+}
+
+function readTenantClaimKeys(envName: string): string[] {
+  const providerSpecific = process.env[envName]?.trim()
+  if (providerSpecific) {
+    return providerSpecific
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+  const shared = process.env.ORBIT_DASHBOARD_OIDC_TENANT_CLAIMS?.trim()
+  if (!shared) {
+    return []
+  }
+  return shared
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function requireProviderEndpoint(value: string | undefined, label: string): string {
+  const normalized = normalizeClaimValue(value)
+  if (!normalized) {
+    throw new Error(`OAuth provider configuration missing ${label}.`)
+  }
+  return normalized
 }
 
 function resolveProxyAuthMode(): ProxyAuthMode {
@@ -1014,6 +1499,48 @@ function readAllowedOrigins(request: NextRequest): Set<string> {
     values.push(request.nextUrl.origin)
   }
   return new Set(values)
+}
+
+function extractRequestOrigin(originHeader: string, refererHeader: string): string {
+  const originFromHeader = normalizeOrigin(originHeader)
+  if (originFromHeader) {
+    return originFromHeader
+  }
+  return normalizeOrigin(refererHeader)
+}
+
+function normalizeOrigin(value: string): string {
+  const normalized = value.trim()
+  if (!normalized) {
+    return ""
+  }
+  try {
+    return new URL(normalized).origin
+  } catch {
+    return ""
+  }
+}
+
+function readAllowMissingOriginForMutations(): boolean {
+  return readEnvFlag("ORBIT_DASHBOARD_ALLOW_MISSING_ORIGIN", false)
+}
+
+function readAllowUnsignedIdTokenFallback(): boolean {
+  return readEnvFlag("ORBIT_DASHBOARD_OIDC_ALLOW_UNSIGNED_ID_TOKEN_FALLBACK", false)
+}
+
+function readEnvFlag(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase()
+  if (!raw) {
+    return fallback
+  }
+  if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") {
+    return true
+  }
+  if (raw === "0" || raw === "false" || raw === "no" || raw === "off") {
+    return false
+  }
+  return fallback
 }
 
 function loginThrottleKey(request: NextRequest): string {

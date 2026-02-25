@@ -4,9 +4,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
 
 from decision_engine.models import MemoryRecord, RetrievedMemory, StorageTier
 from memory_engine.config import EngineConfig
+from memory_engine.storage.db import ApiDashboardUserRow
 from orbit.models import FeedbackRequest, IngestRequest, RetrieveRequest
 from orbit_api.auth import AuthContext
 from orbit_api.config import ApiConfig
@@ -466,6 +469,48 @@ def test_service_resolve_account_context_with_claim_mapping(tmp_path: Path) -> N
         )
         with pytest.raises(AccountMappingError):
             service.resolve_account_context(same_identity_different_account)
+    finally:
+        service.close()
+
+
+def test_service_resolve_account_context_persists_dashboard_identity_profile(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    try:
+        auth = AuthContext(
+            subject="github:12345",
+            scopes=["read", "write"],
+            token="jwt-token",
+            claims={
+                "iss": "https://github.com",
+                "email": "DevUser@Example.com",
+                "name": "Dev User",
+                "picture": "https://avatars.githubusercontent.com/u/12345",
+                "auth_provider": "github",
+            },
+        )
+        resolved = service.resolve_account_context(auth)
+        assert resolved.subject.startswith("acct_")
+        assert resolved.claims["auth_provider"] == "github"
+
+        engine = create_engine(service.config.database_url, future=True)
+        try:
+            with Session(engine) as session:
+                stmt = (
+                    select(ApiDashboardUserRow)
+                    .where(ApiDashboardUserRow.auth_issuer == "https://github.com")
+                    .where(ApiDashboardUserRow.auth_subject == "github:12345")
+                )
+                row = session.execute(stmt).scalar_one()
+                assert row.account_key == resolved.subject
+                assert row.email == "devuser@example.com"
+                assert row.auth_provider == "github"
+                assert row.display_name == "Dev User"
+                assert row.avatar_url == "https://avatars.githubusercontent.com/u/12345"
+                assert row.last_login_at is not None
+        finally:
+            engine.dispose()
     finally:
         service.close()
 

@@ -40,14 +40,21 @@ Auth mode envs:
   - `ORBIT_DASHBOARD_AUTH_PASSWORD`
 - OIDC mode:
   - `ORBIT_DASHBOARD_AUTH_MODE=oidc`
-  - `ORBIT_DASHBOARD_OIDC_ISSUER_URL`
-  - `ORBIT_DASHBOARD_OIDC_CLIENT_ID`
-  - `ORBIT_DASHBOARD_OIDC_CLIENT_SECRET`
-  - optional: `ORBIT_DASHBOARD_OIDC_REDIRECT_URI`, `ORBIT_DASHBOARD_OIDC_SCOPES`, `ORBIT_DASHBOARD_OIDC_PROMPT`, `ORBIT_DASHBOARD_OIDC_TENANT_CLAIMS`
+  - configure one or both:
+    - Google button: `ORBIT_DASHBOARD_OIDC_GOOGLE_CLIENT_ID`, `ORBIT_DASHBOARD_OIDC_GOOGLE_CLIENT_SECRET`
+    - GitHub button: `ORBIT_DASHBOARD_OIDC_GITHUB_CLIENT_ID`, `ORBIT_DASHBOARD_OIDC_GITHUB_CLIENT_SECRET`
+  - optional provider settings: `*_REDIRECT_URI`, `*_SCOPES`, `*_PROMPT`, `*_TENANT_CLAIMS`
+  - optional shared tenant claim keys: `ORBIT_DASHBOARD_OIDC_TENANT_CLAIMS`
+  - legacy single-provider fallback remains supported:
+    - `ORBIT_DASHBOARD_OIDC_ISSUER_URL`
+    - `ORBIT_DASHBOARD_OIDC_CLIENT_ID`
+    - `ORBIT_DASHBOARD_OIDC_CLIENT_SECRET`
 
 Security controls:
 
 - optional: `ORBIT_DASHBOARD_ALLOWED_ORIGINS`
+- optional (default false, not recommended): `ORBIT_DASHBOARD_ALLOW_MISSING_ORIGIN`
+- optional (default false, not recommended): `ORBIT_DASHBOARD_OIDC_ALLOW_UNSIGNED_ID_TOKEN_FALLBACK`
 - optional: `ORBIT_DASHBOARD_LOGIN_WINDOW_SECONDS`
 - optional: `ORBIT_DASHBOARD_LOGIN_MAX_ATTEMPTS`
 - optional: `ORBIT_DASHBOARD_LOGIN_LOCKOUT_SECONDS`
@@ -63,31 +70,30 @@ Google:
 
 ```bash
 ORBIT_DASHBOARD_AUTH_MODE=oidc
-ORBIT_DASHBOARD_OIDC_ISSUER_URL=https://accounts.google.com
-ORBIT_DASHBOARD_OIDC_CLIENT_ID=<google-client-id>
-ORBIT_DASHBOARD_OIDC_CLIENT_SECRET=<google-client-secret>
-ORBIT_DASHBOARD_OIDC_SCOPES="openid profile email"
+ORBIT_DASHBOARD_OIDC_GOOGLE_CLIENT_ID=<google-client-id>
+ORBIT_DASHBOARD_OIDC_GOOGLE_CLIENT_SECRET=<google-client-secret>
+ORBIT_DASHBOARD_OIDC_GOOGLE_SCOPES="openid profile email"
+ORBIT_DASHBOARD_OIDC_GOOGLE_REDIRECT_URI=https://your-dashboard-domain.com/api/dashboard/auth/oidc/callback
 ```
 
-Auth0:
+GitHub:
 
 ```bash
 ORBIT_DASHBOARD_AUTH_MODE=oidc
-ORBIT_DASHBOARD_OIDC_ISSUER_URL=https://<tenant>.us.auth0.com
-ORBIT_DASHBOARD_OIDC_CLIENT_ID=<auth0-client-id>
-ORBIT_DASHBOARD_OIDC_CLIENT_SECRET=<auth0-client-secret>
-ORBIT_DASHBOARD_OIDC_SCOPES="openid profile email"
-ORBIT_DASHBOARD_OIDC_TENANT_CLAIMS=org_id,organization
+ORBIT_DASHBOARD_OIDC_GITHUB_CLIENT_ID=<github-client-id>
+ORBIT_DASHBOARD_OIDC_GITHUB_CLIENT_SECRET=<github-client-secret>
+ORBIT_DASHBOARD_OIDC_GITHUB_SCOPES="read:user user:email"
+ORBIT_DASHBOARD_OIDC_GITHUB_REDIRECT_URI=https://your-dashboard-domain.com/api/dashboard/auth/oidc/callback
 ```
 
-Clerk:
+Enable both buttons at once:
 
 ```bash
 ORBIT_DASHBOARD_AUTH_MODE=oidc
-ORBIT_DASHBOARD_OIDC_ISSUER_URL=https://<your-clerk-domain>
-ORBIT_DASHBOARD_OIDC_CLIENT_ID=<clerk-client-id>
-ORBIT_DASHBOARD_OIDC_CLIENT_SECRET=<clerk-client-secret>
-ORBIT_DASHBOARD_OIDC_SCOPES="openid profile email"
+ORBIT_DASHBOARD_OIDC_GOOGLE_CLIENT_ID=<google-client-id>
+ORBIT_DASHBOARD_OIDC_GOOGLE_CLIENT_SECRET=<google-client-secret>
+ORBIT_DASHBOARD_OIDC_GITHUB_CLIENT_ID=<github-client-id>
+ORBIT_DASHBOARD_OIDC_GITHUB_CLIENT_SECRET=<github-client-secret>
 ```
 
 ## Vercel setup
@@ -131,10 +137,10 @@ Set frontend env (example):
 
 ```bash
 ORBIT_DASHBOARD_AUTH_MODE=oidc
-ORBIT_DASHBOARD_OIDC_ISSUER_URL=http://127.0.0.1:9100
-ORBIT_DASHBOARD_OIDC_CLIENT_ID=orbit-dashboard-local
-ORBIT_DASHBOARD_OIDC_CLIENT_SECRET=orbit-dashboard-local-secret
-ORBIT_DASHBOARD_OIDC_REDIRECT_URI=http://127.0.0.1:3000/api/dashboard/auth/oidc/callback
+ORBIT_DASHBOARD_OIDC_GOOGLE_CLIENT_ID=orbit-dashboard-local
+ORBIT_DASHBOARD_OIDC_GOOGLE_CLIENT_SECRET=orbit-dashboard-local-secret
+ORBIT_DASHBOARD_OIDC_GOOGLE_ISSUER_URL=http://127.0.0.1:9100
+ORBIT_DASHBOARD_OIDC_GOOGLE_REDIRECT_URI=http://127.0.0.1:3000/api/dashboard/auth/oidc/callback
 ```
 
 Then run:

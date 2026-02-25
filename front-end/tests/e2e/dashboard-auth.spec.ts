@@ -62,10 +62,14 @@ test("password login unlocks dashboard and supports create flow", async ({ page 
   await expect(page.getByText("orbit_pk_visible_once_secret")).toBeVisible()
 })
 
-test("OIDC mode shows SSO login path", async ({ page }) => {
+test("OIDC mode shows Google and GitHub login paths", async ({ page }) => {
   await mockDashboardApi(page, {
     mode: "oidc",
     getAuthenticated: () => false,
+    oidcProviders: [
+      { id: "google", label: "Continue with Google", path: "/api/dashboard/auth/oidc/start?provider=google" },
+      { id: "github", label: "Continue with GitHub", path: "/api/dashboard/auth/oidc/start?provider=github" },
+    ],
     onListKeys: async () => ({ data: [], cursor: null, has_more: false }),
     onCreateKey: async () => {
       throw new Error("unused")
@@ -79,7 +83,7 @@ test("OIDC mode shows SSO login path", async ({ page }) => {
   })
 
   let navigatedToOidc = false
-  await page.route("**/api/dashboard/auth/oidc/start", async (route) => {
+  await page.route("**/api/dashboard/auth/oidc/start?provider=google", async (route) => {
     navigatedToOidc = true
     await route.fulfill({
       status: 307,
@@ -90,8 +94,9 @@ test("OIDC mode shows SSO login path", async ({ page }) => {
   })
 
   await page.goto("/dashboard")
-  await expect(page.getByRole("button", { name: "Continue with SSO" })).toBeVisible()
-  await page.getByRole("button", { name: "Continue with SSO" }).click()
+  await expect(page.getByRole("button", { name: "Continue with Google" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Continue with GitHub" })).toBeVisible()
+  await page.getByRole("button", { name: "Continue with Google" }).click()
   await expect.poll(() => navigatedToOidc).toBeTruthy()
 })
 
@@ -123,6 +128,7 @@ async function mockDashboardApi(
   options: {
     mode: DashboardMode
     getAuthenticated: () => boolean
+    oidcProviders?: Array<{ id: string; label: string; path: string }>
     onLogin?: () => Promise<void>
     onListKeys: () => Promise<{ data: unknown[]; cursor: string | null; has_more: boolean }>
     onCreateKey: () => Promise<unknown>
@@ -138,6 +144,12 @@ async function mockDashboardApi(
         authenticated: options.getAuthenticated(),
         mode: options.mode,
         oidc_login_path: "/api/dashboard/auth/oidc/start",
+        oidc_login_providers: options.mode === "oidc"
+          ? (
+            options.oidcProviders
+            ?? [{ id: "sso", label: "Continue with SSO", path: "/api/dashboard/auth/oidc/start" }]
+          )
+          : undefined,
       }),
     })
   })
