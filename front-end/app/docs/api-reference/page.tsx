@@ -46,6 +46,9 @@ export default function ApiReferencePage() {
         <p className="text-xs text-muted-foreground leading-relaxed mb-3">
           All protected endpoints require <code className="text-primary">Authorization: Bearer {'<token>'}</code> (JWT or Orbit API key).
         </p>
+        <p className="text-xs text-muted-foreground leading-relaxed mb-3">
+          For Orbit Cloud, create/manage API keys in <a href="/dashboard" className="text-primary hover:underline">Dashboard</a>. API key material is shown once at creation/rotation.
+        </p>
         <p className="text-xs text-muted-foreground leading-relaxed">
           Required JWT claims: <code className="text-primary">sub</code>, <code className="text-primary">iat</code>, <code className="text-primary">exp</code>, <code className="text-primary">iss</code>, <code className="text-primary">aud</code>. POST endpoints support idempotency via <code className="text-primary">Idempotency-Key</code>. Dashboard key endpoints require write scope (or <code className="text-primary">keys:write</code>).
         </p>

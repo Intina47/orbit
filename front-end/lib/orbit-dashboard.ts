@@ -41,6 +41,33 @@ export type OrbitApiKeyRotateRequest = {
   scopes?: string[]
 }
 
+export type OrbitAccountQuota = {
+  events_per_day: number
+  queries_per_day: number
+  events_per_month?: number | null
+  queries_per_month?: number | null
+  api_keys?: number | null
+  retention_days?: number | null
+  plan?: string | null
+  reset_at?: string | null
+  warning_threshold_percent?: number | null
+  critical_threshold_percent?: number | null
+}
+
+export type OrbitStatusResponse = {
+  connected: boolean
+  api_version: string
+  account_usage: {
+    events_ingested_this_month: number
+    queries_this_month: number
+    storage_usage_mb: number
+    active_api_keys?: number | null
+    quota: OrbitAccountQuota
+  }
+  latest_ingestion?: string | null
+  uptime_percent: number
+}
+
 export type OrbitDashboardSessionResponse = {
   authenticated: boolean
   mode: "password" | "oidc" | "disabled"
@@ -60,6 +87,7 @@ export type OrbitDashboardSessionResponse = {
 
 const DEFAULT_PROXY_PREFIX = "/api/dashboard"
 const DEFAULT_ORBIT_API_BASE_URL = "http://localhost:8000"
+const DEFAULT_PILOT_PRO_CONTACT_EMAIL = "hello@theorbit.dev"
 
 export const DASHBOARD_SCOPE_OPTIONS = [
   "read",
@@ -73,10 +101,12 @@ export const DASHBOARD_DEFAULT_SCOPES: string[] = ["read", "write", "feedback"]
 
 export class OrbitDashboardApiError extends Error {
   status: number
+  code: string | null
 
-  constructor(status: number, detail: string) {
+  constructor(status: number, detail: string, code: string | null = null) {
     super(detail)
     this.status = status
+    this.code = code
   }
 }
 
@@ -86,6 +116,14 @@ export function getOrbitApiBaseUrl(): string {
     return DEFAULT_ORBIT_API_BASE_URL
   }
   return raw.replace(/\/+$/, "")
+}
+
+export function getPilotProContactEmail(): string {
+  const raw = process.env.NEXT_PUBLIC_ORBIT_PILOT_PRO_CONTACT_EMAIL?.trim()
+  if (!raw) {
+    return DEFAULT_PILOT_PRO_CONTACT_EMAIL
+  }
+  return raw
 }
 
 export class OrbitDashboardClient {
@@ -125,6 +163,14 @@ export class OrbitDashboardClient {
     }
     const suffix = query.size > 0 ? `?${query.toString()}` : ""
     return this.request<OrbitApiKeyListResponse>(`${this.proxyPrefix}/keys${suffix}`)
+  }
+
+  async getStatus(): Promise<OrbitStatusResponse> {
+    return this.request<OrbitStatusResponse>(`${this.proxyPrefix}/status`)
+  }
+
+  async getMetricsText(): Promise<string> {
+    return this.requestText(`${this.proxyPrefix}/metrics`)
   }
 
   async createApiKey(payload: OrbitApiKeyCreateRequest): Promise<OrbitApiKeyIssueResponse> {
@@ -167,12 +213,35 @@ export class OrbitDashboardClient {
     const bodyText = await response.text()
     const parsedBody = parseBody(bodyText)
     if (!response.ok) {
+      const resolvedError = extractError(parsedBody, bodyText, response.status)
       throw new OrbitDashboardApiError(
         response.status,
-        extractErrorDetail(parsedBody, bodyText, response.status),
+        resolvedError.message,
+        resolvedError.code,
       )
     }
     return parsedBody as T
+  }
+
+  private async requestText(path: string, init?: RequestInit): Promise<string> {
+    const headers = new Headers(init?.headers)
+    headers.set("Accept", "text/plain, application/json")
+    const response = await fetch(path, {
+      ...init,
+      headers,
+      cache: "no-store",
+    })
+    const bodyText = await response.text()
+    if (!response.ok) {
+      const parsedBody = parseBody(bodyText)
+      const resolvedError = extractError(parsedBody, bodyText, response.status)
+      throw new OrbitDashboardApiError(
+        response.status,
+        resolvedError.message,
+        resolvedError.code,
+      )
+    }
+    return bodyText
   }
 }
 
@@ -187,15 +256,40 @@ function parseBody(text: string): unknown {
   }
 }
 
-function extractErrorDetail(parsedBody: unknown, fallbackText: string, status: number): string {
-  if (typeof parsedBody === "object" && parsedBody !== null && "detail" in parsedBody) {
+function extractError(
+  parsedBody: unknown,
+  fallbackText: string,
+  status: number,
+): { message: string; code: string | null } {
+  if (typeof parsedBody === "object" && parsedBody !== null) {
     const detail = (parsedBody as { detail?: unknown }).detail
+    const topLevelCode = normalizeErrorCode(
+      (parsedBody as { error_code?: unknown }).error_code,
+    )
     if (typeof detail === "string" && detail.trim()) {
-      return detail
+      return { message: detail.trim(), code: topLevelCode }
+    }
+    if (typeof detail === "object" && detail !== null) {
+      const detailObj = detail as { message?: unknown; error_code?: unknown }
+      const message = detailObj.message
+      if (typeof message === "string" && message.trim()) {
+        return {
+          message: message.trim(),
+          code: normalizeErrorCode(detailObj.error_code) ?? topLevelCode,
+        }
+      }
     }
   }
   if (fallbackText.trim()) {
-    return fallbackText.trim()
+    return { message: fallbackText.trim(), code: null }
   }
-  return `Request failed with status ${status}.`
+  return { message: `Request failed with status ${status}.`, code: null }
+}
+
+function normalizeErrorCode(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null
+  }
+  const normalized = value.trim()
+  return normalized.length > 0 ? normalized : null
 }

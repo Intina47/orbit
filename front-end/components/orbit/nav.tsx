@@ -49,7 +49,7 @@ export function Nav() {
             </div>
           )}
           <Link
-            href={isDocs || isDashboard ? "/" : "#cta"}
+            href={isDocs || isDashboard ? "/" : "/dashboard"}
             className="border border-foreground px-5 py-2 text-foreground text-xs tracking-wider hover:bg-foreground hover:text-background transition-all duration-200"
           >
             {isDocs || isDashboard ? "HOME" : "START BUILDING"}

@@ -48,6 +48,8 @@ def test_api_config_from_env(monkeypatch) -> None:
     assert config.sqlite_fallback_path == "tmp.db"
     assert config.free_events_per_day == 50
     assert config.free_queries_per_day == 250
+    assert config.free_events_per_month == 1500
+    assert config.free_queries_per_month == 7500
     assert config.jwt_secret == "secret"
     assert config.jwt_issuer == "issuer"
     assert config.jwt_audience == "audience"

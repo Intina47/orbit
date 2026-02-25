@@ -17,7 +17,7 @@ from typing import Any, TypeVar
 from uuid import uuid4
 
 import numpy as np
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -70,13 +70,42 @@ class RateLimitSnapshot:
         }
 
 
+@dataclass(frozen=True)
+class PlanQuotaPolicy:
+    plan: str
+    ingest_events_per_month: int
+    retrieve_queries_per_month: int
+    api_keys_limit: int
+    retention_days: int
+    warning_threshold_percent: int
+    critical_threshold_percent: int
+
+
 class RateLimitExceededError(RuntimeError):
     """Raised when an API key exceeds quota."""
 
-    def __init__(self, snapshot: RateLimitSnapshot, retry_after_seconds: int) -> None:
-        super().__init__("Rate limit exceeded")
+    def __init__(
+        self,
+        snapshot: RateLimitSnapshot,
+        retry_after_seconds: int,
+        *,
+        error_code: str,
+        detail: str,
+    ) -> None:
+        super().__init__(detail)
         self.snapshot = snapshot
         self.retry_after_seconds = retry_after_seconds
+        self.error_code = error_code
+        self.detail = detail
+
+
+class PlanQuotaExceededError(RuntimeError):
+    """Raised when a plan-level non-request quota is exceeded."""
+
+    def __init__(self, *, error_code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.error_code = error_code
+        self.detail = detail
 
 
 class IdempotencyConflictError(RuntimeError):
@@ -153,6 +182,10 @@ class OrbitApiService:
             "dashboard_key_rotation_failures_total": 0.0,
         }
         self._http_status_counts: dict[int, float] = {}
+        self._pilot_pro_accounts = {
+            self._normalize_account_key(account_key)
+            for account_key in self._config.pilot_pro_account_keys
+        }
 
     @property
     def config(self) -> ApiConfig:
@@ -323,6 +356,7 @@ class OrbitApiService:
         normalized_account_key = self._normalize_account_key(account_key)
         normalized_name = self._normalize_api_key_name(name)
         normalized_scopes = self._normalize_scopes(scopes)
+        policy = self._plan_policy(normalized_account_key)
         scopes_json = json.dumps(
             normalized_scopes,
             sort_keys=True,
@@ -343,6 +377,18 @@ class OrbitApiService:
 
             try:
                 with self._state_session_factory() as session, session.begin():
+                    active_key_count = self._active_api_key_count_with_session(
+                        session=session,
+                        account_key=normalized_account_key,
+                    )
+                    if active_key_count >= policy.api_keys_limit:
+                        raise PlanQuotaExceededError(
+                            error_code="quota_api_keys_exceeded",
+                            detail=(
+                                f"API key limit reached for plan '{policy.plan}' "
+                                f"({policy.api_keys_limit} max active keys)."
+                            ),
+                        )
                     session.add(
                         ApiKeyRow(
                             key_id=key_id,
@@ -884,10 +930,13 @@ class OrbitApiService:
 
     def status(self, account_key: str) -> StatusResponse:
         now = datetime.now(UTC)
+        normalized_account_key = self._normalize_account_key(account_key)
+        policy = self._plan_policy(normalized_account_key)
         with self._state_lock:
             latest_ingestion = self._latest_ingestion
-        usage = self._read_usage_row(account_key)
-        storage_mb = self._storage_usage_mb(account_key=account_key)
+        usage = self._read_usage_row(normalized_account_key)
+        storage_mb = self._storage_usage_mb(account_key=normalized_account_key)
+        active_api_keys = self._count_active_api_keys(normalized_account_key)
         events_month = (
             usage.events_month
             if usage
@@ -909,9 +958,21 @@ class OrbitApiService:
                 events_ingested_this_month=events_month,
                 queries_this_month=queries_month,
                 storage_usage_mb=storage_mb,
+                active_api_keys=active_api_keys,
                 quota=AccountQuota(
-                    events_per_day=self._config.free_events_per_day,
-                    queries_per_day=self._config.free_queries_per_day,
+                    events_per_day=max(policy.ingest_events_per_month // 30, 1),
+                    queries_per_day=max(policy.retrieve_queries_per_month // 30, 1),
+                    events_per_month=policy.ingest_events_per_month,
+                    queries_per_month=policy.retrieve_queries_per_month,
+                    api_keys=policy.api_keys_limit,
+                    retention_days=policy.retention_days,
+                    plan=policy.plan,
+                    reset_at=datetime.fromtimestamp(
+                        self._next_month_reset_epoch(now),
+                        tz=UTC,
+                    ),
+                    warning_threshold_percent=policy.warning_threshold_percent,
+                    critical_threshold_percent=policy.critical_threshold_percent,
                 ),
             ),
             latest_ingestion=latest_ingestion,
@@ -1876,40 +1937,53 @@ class OrbitApiService:
             )
             session.add(usage)
         self._roll_usage_window(usage=usage, now=now)
+        policy = self._plan_policy(account_key)
 
         if kind == "event":
-            limit = self._config.free_events_per_day
-            used = usage.events_today
+            limit = policy.ingest_events_per_month
+            used = usage.events_month
+            error_code = "quota_ingest_monthly_exceeded"
+            quota_label = "ingest"
+        elif kind == "query":
+            limit = policy.retrieve_queries_per_month
+            used = usage.queries_month
+            error_code = "quota_retrieve_monthly_exceeded"
+            quota_label = "retrieve"
         else:
-            limit = self._config.free_queries_per_day
-            used = usage.queries_today
+            msg = f"Unsupported quota kind: {kind}"
+            raise ValueError(msg)
 
         if used + amount > limit:
             snapshot = RateLimitSnapshot(
                 limit=limit,
                 remaining=max(limit - used, 0),
-                reset_epoch=self._next_day_reset_epoch(now),
+                reset_epoch=self._next_month_reset_epoch(now),
             )
             retry_after = max(snapshot.reset_epoch - int(now.timestamp()), 1)
             raise RateLimitExceededError(
                 snapshot=snapshot,
                 retry_after_seconds=retry_after,
+                error_code=error_code,
+                detail=(
+                    f"Monthly {quota_label} quota reached for plan '{policy.plan}'. "
+                    "Request Pilot Pro for higher limits or wait for monthly reset."
+                ),
             )
 
         if kind == "event":
             usage.events_today += amount
             usage.events_month += amount
-            remaining = max(limit - usage.events_today, 0)
+            remaining = max(limit - usage.events_month, 0)
         else:
             usage.queries_today += amount
             usage.queries_month += amount
-            remaining = max(limit - usage.queries_today, 0)
+            remaining = max(limit - usage.queries_month, 0)
         usage.updated_at = now
 
         return RateLimitSnapshot(
             limit=limit,
             remaining=remaining,
-            reset_epoch=self._next_day_reset_epoch(now),
+            reset_epoch=self._next_month_reset_epoch(now),
         )
 
     @staticmethod
@@ -1925,15 +1999,17 @@ class OrbitApiService:
             usage.queries_month = 0
 
     @staticmethod
-    def _next_day_reset_epoch(now: datetime) -> int:
-        next_day = datetime(
-            year=now.year,
-            month=now.month,
-            day=now.day,
-            tzinfo=UTC,
-        )
-        next_day = next_day.replace(hour=0, minute=0, second=0, microsecond=0)
-        return int(next_day.timestamp()) + 86400
+    def _next_month_reset_epoch(now: datetime) -> int:
+        if now.month == 12:
+            next_month = datetime(year=now.year + 1, month=1, day=1, tzinfo=UTC)
+        else:
+            next_month = datetime(
+                year=now.year,
+                month=now.month + 1,
+                day=1,
+                tzinfo=UTC,
+            )
+        return int(next_month.timestamp())
 
     def _read_usage_row(self, account_key: str) -> ApiAccountUsageRow | None:
         with self._state_session_factory() as session:
@@ -1969,6 +2045,57 @@ class OrbitApiService:
             .with_for_update()
         )
         return session.execute(stmt).scalar_one_or_none()
+
+    def _count_active_api_keys(self, account_key: str) -> int:
+        normalized_account_key = self._normalize_account_key(account_key)
+        with self._state_session_factory() as session:
+            stmt = (
+                select(func.count())
+                .select_from(ApiKeyRow)
+                .where(ApiKeyRow.account_key == normalized_account_key)
+                .where(ApiKeyRow.status == "active")
+                .where(ApiKeyRow.revoked_at.is_(None))
+            )
+            count = session.execute(stmt).scalar_one()
+            return int(count or 0)
+
+    def _active_api_key_count_with_session(
+        self,
+        *,
+        session: Session,
+        account_key: str,
+    ) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(ApiKeyRow)
+            .where(ApiKeyRow.account_key == account_key)
+            .where(ApiKeyRow.status == "active")
+            .where(ApiKeyRow.revoked_at.is_(None))
+        )
+        count = session.execute(stmt).scalar_one()
+        return int(count or 0)
+
+    def _plan_policy(self, account_key: str) -> PlanQuotaPolicy:
+        normalized_account_key = self._normalize_account_key(account_key)
+        if normalized_account_key in self._pilot_pro_accounts:
+            return PlanQuotaPolicy(
+                plan="pilot_pro",
+                ingest_events_per_month=self._config.pilot_pro_events_per_month,
+                retrieve_queries_per_month=self._config.pilot_pro_queries_per_month,
+                api_keys_limit=self._config.pilot_pro_api_keys,
+                retention_days=self._config.pilot_pro_retention_days,
+                warning_threshold_percent=self._config.usage_warning_threshold_percent,
+                critical_threshold_percent=self._config.usage_critical_threshold_percent,
+            )
+        return PlanQuotaPolicy(
+            plan="free",
+            ingest_events_per_month=self._config.free_events_per_month,
+            retrieve_queries_per_month=self._config.free_queries_per_month,
+            api_keys_limit=self._config.free_api_keys,
+            retention_days=self._config.free_retention_days,
+            warning_threshold_percent=self._config.usage_warning_threshold_percent,
+            critical_threshold_percent=self._config.usage_critical_threshold_percent,
+        )
 
     def _lookup_dashboard_account_mapping(
         self,

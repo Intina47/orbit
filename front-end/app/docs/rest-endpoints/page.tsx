@@ -13,6 +13,12 @@ export default function RestEndpointsPage() {
       <p className="text-muted-foreground text-base leading-relaxed max-w-xl mb-12">
         Curl-first examples for Orbit endpoints. Protected routes require Bearer JWT or Orbit API key.
       </p>
+      <div className="border border-primary/30 bg-primary/5 p-6 mb-12">
+        <h3 className="text-sm font-bold text-primary mb-2">Credential source</h3>
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          Orbit Cloud users should create keys in <a href="/dashboard" className="text-primary hover:underline">Dashboard</a> and replace <code className="text-primary">{"<jwt-token>"}</code> with <code className="text-primary">orbit_pk_...</code>. Self-hosted users can keep JWT.
+        </p>
+      </div>
 
       {/* Ingest */}
       <h2 className="text-2xl font-bold text-foreground mb-4">POST /v1/ingest</h2>

@@ -47,7 +47,7 @@ export function Hero() {
             <a href="#metrics" className="hover:text-foreground transition-colors">METRICS</a>
           </div>
           <a
-            href="#cta"
+            href="/dashboard"
             className="border border-foreground px-5 py-2 text-foreground text-xs tracking-wider hover:bg-foreground hover:text-background transition-all duration-200"
           >
             START NOW

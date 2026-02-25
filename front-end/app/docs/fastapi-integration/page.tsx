@@ -13,6 +13,9 @@ export default function FastApiIntegrationPage() {
       <p className="text-muted-foreground text-base leading-relaxed max-w-xl mb-12">
         Reference pattern for a FastAPI chatbot: ingest user signal, retrieve context, answer, ingest assistant output, record feedback.
       </p>
+      <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+        Orbit Cloud users can create API keys in <a href="/dashboard" className="text-primary hover:underline">Dashboard</a>. Replace <code className="text-primary">{"<jwt-token>"}</code> below with your <code className="text-primary">orbit_pk_...</code> key.
+      </p>
 
       <CodeBlock
         code={`from fastapi import FastAPI

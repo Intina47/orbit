@@ -428,7 +428,7 @@ from orbit import MemoryEngine, Config
 engine = MemoryEngine(
     api_key="orbit_pk_...",
     config=Config(
-        base_url="https://api.orbit.dev",
+        base_url="https://orbit-api-ic4qh4dzga-uc.a.run.app",
         timeout_seconds=30,
         max_retries=3,
         retry_backoff_factor=2.0,
@@ -472,7 +472,7 @@ except OrbitServerError as e:
 ```python
 Config(
     api_key=None,  # Required, set via env var ORBIT_API_KEY
-    base_url="https://api.orbit.dev",
+    base_url="https://orbit-api-ic4qh4dzga-uc.a.run.app",
     timeout_seconds=30,
     max_retries=3,
     retry_backoff_factor=2.0,
@@ -485,7 +485,7 @@ Config(
 **Environment Variables** (12-factor):
 ```bash
 ORBIT_API_KEY=orbit_pk_...
-ORBIT_BASE_URL=https://api.orbit.dev
+ORBIT_BASE_URL=https://orbit-api-ic4qh4dzga-uc.a.run.app
 ORBIT_TIMEOUT=30
 ORBIT_LOG_LEVEL=info
 ```
@@ -937,4 +937,3 @@ Every line of code you add should either:
 If it doesn't do one of those three, don't add it.
 
 Simplicity is the feature.
-

@@ -34,11 +34,13 @@ import {
 import {
   DASHBOARD_DEFAULT_SCOPES,
   DASHBOARD_SCOPE_OPTIONS,
+  getPilotProContactEmail,
   OrbitApiKeyIssueResponse,
   OrbitApiKeySummary,
   OrbitDashboardApiError,
   OrbitDashboardClient,
   OrbitDashboardSessionResponse,
+  OrbitStatusResponse,
 } from "@/lib/orbit-dashboard"
 
 const PAGE_SIZE = 10
@@ -59,6 +61,12 @@ export function DashboardConsole() {
   const [isSigningOut, setIsSigningOut] = useState(false)
 
   const [keys, setKeys] = useState<OrbitApiKeySummary[]>([])
+  const [accountStatus, setAccountStatus] = useState<OrbitStatusResponse | null>(null)
+  const [metricsText, setMetricsText] = useState("")
+  const [loadingMetrics, setLoadingMetrics] = useState(false)
+  const [metricsError, setMetricsError] = useState<string | null>(null)
+  const [loadingStatus, setLoadingStatus] = useState(false)
+  const [statusError, setStatusError] = useState<string | null>(null)
   const [loadingKeys, setLoadingKeys] = useState(false)
   const [requestError, setRequestError] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
@@ -124,6 +132,92 @@ export function DashboardConsole() {
     }
     setAuthError(describeAuthError(authErrorCode))
   }, [])
+
+  useEffect(() => {
+    if (authState !== "signed_in") {
+      setAccountStatus(null)
+      setLoadingStatus(false)
+      setStatusError(null)
+      return
+    }
+
+    let isCancelled = false
+    const loadStatus = async () => {
+      setLoadingStatus(true)
+      setStatusError(null)
+      try {
+        const response = await client.getStatus()
+        if (isCancelled) {
+          return
+        }
+        setAccountStatus(response)
+      } catch (error) {
+        if (isCancelled) {
+          return
+        }
+        if (isUnauthorized(error)) {
+          setAuthState("signed_out")
+          setAuthError("Dashboard session expired. Sign in again.")
+          setAccountStatus(null)
+          setStatusError(null)
+          return
+        }
+        setAccountStatus(null)
+        setStatusError(readErrorMessage(error))
+      } finally {
+        if (!isCancelled) {
+          setLoadingStatus(false)
+        }
+      }
+    }
+    void loadStatus()
+    return () => {
+      isCancelled = true
+    }
+  }, [authState, client, reloadTick])
+
+  useEffect(() => {
+    if (authState !== "signed_in") {
+      setMetricsText("")
+      setLoadingMetrics(false)
+      setMetricsError(null)
+      return
+    }
+
+    let isCancelled = false
+    const loadMetrics = async () => {
+      setLoadingMetrics(true)
+      setMetricsError(null)
+      try {
+        const response = await client.getMetricsText()
+        if (isCancelled) {
+          return
+        }
+        setMetricsText(response)
+      } catch (error) {
+        if (isCancelled) {
+          return
+        }
+        if (isUnauthorized(error)) {
+          setAuthState("signed_out")
+          setAuthError("Dashboard session expired. Sign in again.")
+          setMetricsText("")
+          setMetricsError(null)
+          return
+        }
+        setMetricsText("")
+        setMetricsError(readErrorMessage(error))
+      } finally {
+        if (!isCancelled) {
+          setLoadingMetrics(false)
+        }
+      }
+    }
+    void loadMetrics()
+    return () => {
+      isCancelled = true
+    }
+  }, [authState, client, reloadTick])
 
   useEffect(() => {
     if (authState !== "signed_in") {
@@ -263,6 +357,10 @@ export function DashboardConsole() {
       setHasMore(false)
       setNextCursor(null)
       setRequestError(null)
+      setAccountStatus(null)
+      setStatusError(null)
+      setMetricsText("")
+      setMetricsError(null)
     } catch (error) {
       setAuthError(readErrorMessage(error))
     } finally {
@@ -419,6 +517,13 @@ export function DashboardConsole() {
   }
 
   const isAuthenticated = authState === "signed_in"
+  const usageSummary = accountStatus ? deriveUsageSummary(accountStatus, keys) : null
+  const usageAlerts = usageSummary ? buildUsageAlerts(usageSummary) : []
+  const pilotProRequestHref = buildPilotProRequestHref(usageSummary)
+  const metricsSnapshot = useMemo(
+    () => parsePrometheusMetrics(metricsText),
+    [metricsText],
+  )
 
   return (
     <div className="space-y-8">
@@ -528,6 +633,133 @@ export function DashboardConsole() {
           )}
           <span>{statusMessage}</span>
         </div>
+      )}
+
+      {isAuthenticated && (
+        <Card id="usage-breakdown">
+          <CardHeader>
+            <CardTitle>Usage & Plan</CardTitle>
+            <CardDescription>
+              {usageSummary
+                ? `Current plan: ${usageSummary.planLabel}`
+                : "Usage summary for your active account."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {loadingStatus && (
+              <div className="border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
+                Loading usage metrics...
+              </div>
+            )}
+            {statusError && (
+              <div className="border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+                {statusError}
+              </div>
+            )}
+            {!loadingStatus && !statusError && usageSummary && (
+              <>
+                <div className="border border-border bg-secondary/20 p-3">
+                  <div className="text-sm font-medium text-foreground">
+                    Current plan: {usageSummary.planLabel}
+                  </div>
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    Ingest: {formatCount(usageSummary.ingestUsed)}/{formatCount(usageSummary.ingestLimit)} | Retrieve:{" "}
+                    {formatCount(usageSummary.retrieveUsed)}/{formatCount(usageSummary.retrieveLimit)}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    Active keys: {formatCount(usageSummary.activeApiKeys)}/{formatCount(usageSummary.apiKeyLimit)} | Resets{" "}
+                    {usageSummary.resetAtLabel}
+                  </div>
+                </div>
+
+                {usageAlerts.map((alert) => (
+                  <div
+                    key={alert.id}
+                    className={`border p-3 text-sm ${
+                      alert.tone === "limit"
+                        ? "border-destructive/40 bg-destructive/10 text-destructive"
+                        : alert.tone === "critical"
+                          ? "border-amber-500/40 bg-amber-500/10 text-amber-700"
+                          : "border-primary/30 bg-primary/5 text-foreground"
+                    }`}
+                  >
+                    <div className="font-medium">{alert.title}</div>
+                    <div className="mt-1 text-xs opacity-90">{alert.body}</div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button asChild size="sm">
+                        <a href={pilotProRequestHref}>Request Pilot Pro</a>
+                      </Button>
+                      <Button asChild size="sm" variant="outline">
+                        <a href="#usage-breakdown">View usage</a>
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {isAuthenticated && (
+        <Card id="metrics-overview">
+          <CardHeader>
+            <CardTitle>Runtime Metrics</CardTitle>
+            <CardDescription>
+              Live Prometheus counters from Orbit API via secure dashboard proxy.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {loadingMetrics && (
+              <div className="border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
+                Loading metrics...
+              </div>
+            )}
+            {metricsError && (
+              <div className="border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+                {metricsError}
+              </div>
+            )}
+            {!loadingMetrics && !metricsError && metricsText.trim() && (
+              <>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <MetricTile
+                    label="Ingest Requests"
+                    value={formatCount(metricsSnapshot.ingestRequestsTotal)}
+                  />
+                  <MetricTile
+                    label="Retrieve Requests"
+                    value={formatCount(metricsSnapshot.retrieveRequestsTotal)}
+                  />
+                  <MetricTile
+                    label="Feedback Requests"
+                    value={formatCount(metricsSnapshot.feedbackRequestsTotal)}
+                  />
+                  <MetricTile
+                    label="Uptime"
+                    value={formatDurationSeconds(metricsSnapshot.uptimeSeconds)}
+                  />
+                  <MetricTile
+                    label="Dashboard Auth Failures"
+                    value={formatCount(metricsSnapshot.dashboardAuthFailuresTotal)}
+                  />
+                  <MetricTile
+                    label="Key Rotation Failures"
+                    value={formatCount(metricsSnapshot.dashboardKeyRotationFailuresTotal)}
+                  />
+                </div>
+                <details className="border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
+                  <summary className="cursor-pointer font-medium text-foreground">
+                    Show raw Prometheus payload
+                  </summary>
+                  <pre className="mt-3 whitespace-pre-wrap break-all">
+                    {metricsText}
+                  </pre>
+                </details>
+              </>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {isAuthenticated && revealedKey && (
@@ -823,18 +1055,310 @@ export function DashboardConsole() {
   )
 }
 
+type PrometheusSnapshot = {
+  ingestRequestsTotal: number
+  retrieveRequestsTotal: number
+  feedbackRequestsTotal: number
+  dashboardAuthFailuresTotal: number
+  dashboardKeyRotationFailuresTotal: number
+  uptimeSeconds: number
+}
+
+function MetricTile(props: { label: string; value: string }) {
+  const { label, value } = props
+  return (
+    <div className="border border-border bg-secondary/20 p-3">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 text-base font-medium text-foreground">{value}</div>
+    </div>
+  )
+}
+
+function parsePrometheusMetrics(metricsText: string): PrometheusSnapshot {
+  return {
+    ingestRequestsTotal: parsePrometheusMetricValue(metricsText, "orbit_ingest_requests_total"),
+    retrieveRequestsTotal: parsePrometheusMetricValue(metricsText, "orbit_retrieve_requests_total"),
+    feedbackRequestsTotal: parsePrometheusMetricValue(metricsText, "orbit_feedback_requests_total"),
+    dashboardAuthFailuresTotal: parsePrometheusMetricValue(
+      metricsText,
+      "orbit_dashboard_auth_failures_total",
+    ),
+    dashboardKeyRotationFailuresTotal: parsePrometheusMetricValue(
+      metricsText,
+      "orbit_dashboard_key_rotation_failures_total",
+    ),
+    uptimeSeconds: parsePrometheusMetricValue(metricsText, "orbit_uptime_seconds"),
+  }
+}
+
+function parsePrometheusMetricValue(metricsText: string, metricName: string): number {
+  const escapedName = metricName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const matcher = new RegExp(`^${escapedName}(?:\\{[^}]*\\})?\\s+([0-9]+(?:\\.[0-9]+)?)$`, "m")
+  const match = metricsText.match(matcher)
+  if (!match) {
+    return 0
+  }
+  const value = Number.parseFloat(match[1])
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+  return value
+}
+
 function isUnauthorized(error: unknown): boolean {
   return error instanceof OrbitDashboardApiError && error.status === 401
 }
 
 function readErrorMessage(error: unknown): string {
   if (error instanceof OrbitDashboardApiError) {
+    const code = error.code?.trim().toLowerCase()
+    if (code === "quota_ingest_monthly_exceeded") {
+      return "Monthly ingest limit reached on Free. New events are blocked until monthly reset. Request Pilot Pro for higher limits."
+    }
+    if (code === "quota_retrieve_monthly_exceeded") {
+      return "Monthly retrieval limit reached on Free. Retrieval is blocked until monthly reset. Request Pilot Pro for higher limits."
+    }
+    if (code === "quota_api_keys_exceeded") {
+      return "API key limit reached for this plan. Revoke an unused key or request Pilot Pro."
+    }
+    if (code === "rate_limit_exceeded") {
+      return "Too many requests. Retry after the current rate-limit window resets."
+    }
+    if (code === "dashboard_proxy_upstream_unreachable") {
+      return error.message
+    }
     return error.message
   }
   if (error instanceof Error) {
     return error.message
   }
   return "Unexpected request failure."
+}
+
+type UsageSummary = {
+  planLabel: string
+  planCode: string
+  ingestUsed: number
+  ingestLimit: number
+  retrieveUsed: number
+  retrieveLimit: number
+  activeApiKeys: number
+  apiKeyLimit: number
+  resetAtIso: string | null
+  resetAtLabel: string
+  warningThresholdPercent: number
+  criticalThresholdPercent: number
+}
+
+type UsageAlert = {
+  id: string
+  tone: "warning" | "critical" | "limit"
+  title: string
+  body: string
+}
+
+function deriveUsageSummary(
+  status: OrbitStatusResponse,
+  keys: OrbitApiKeySummary[],
+): UsageSummary {
+  const quota = status.account_usage.quota
+  const planCode = (quota.plan ?? "free").trim().toLowerCase() || "free"
+  const planLabel = planCode === "pilot_pro" ? "Pilot Pro" : "Free"
+  const ingestLimit = resolveMonthlyLimit(quota.events_per_month, quota.events_per_day)
+  const retrieveLimit = resolveMonthlyLimit(quota.queries_per_month, quota.queries_per_day)
+  const apiKeyLimit = resolveLimit(
+    quota.api_keys,
+    defaultApiKeyLimitForPlan(planCode),
+  )
+  const activeApiKeysFromStatus = sanitizeCount(status.account_usage.active_api_keys ?? 0)
+  const activeApiKeysFromList = keys.filter((item) => item.status === "active").length
+  const resetAtIso = normalizeOptionalString(quota.reset_at)
+  return {
+    planLabel,
+    planCode,
+    ingestUsed: sanitizeCount(status.account_usage.events_ingested_this_month),
+    ingestLimit,
+    retrieveUsed: sanitizeCount(status.account_usage.queries_this_month),
+    retrieveLimit,
+    activeApiKeys: Math.max(activeApiKeysFromStatus, activeApiKeysFromList),
+    apiKeyLimit,
+    resetAtIso,
+    resetAtLabel: resetAtIso ? formatDate(resetAtIso) : "next month (UTC)",
+    warningThresholdPercent: sanitizePercent(quota.warning_threshold_percent, 80),
+    criticalThresholdPercent: sanitizePercent(quota.critical_threshold_percent, 95),
+  }
+}
+
+function buildUsageAlerts(summary: UsageSummary): UsageAlert[] {
+  const alerts: UsageAlert[] = []
+  alerts.push(...buildResourceAlerts({
+    key: "ingest",
+    label: "ingest quota",
+    planLabel: summary.planLabel,
+    used: summary.ingestUsed,
+    limit: summary.ingestLimit,
+    warningThresholdPercent: summary.warningThresholdPercent,
+    criticalThresholdPercent: summary.criticalThresholdPercent,
+    resetAtLabel: summary.resetAtLabel,
+  }))
+  alerts.push(...buildResourceAlerts({
+    key: "retrieve",
+    label: "retrieval quota",
+    planLabel: summary.planLabel,
+    used: summary.retrieveUsed,
+    limit: summary.retrieveLimit,
+    warningThresholdPercent: summary.warningThresholdPercent,
+    criticalThresholdPercent: summary.criticalThresholdPercent,
+    resetAtLabel: summary.resetAtLabel,
+  }))
+  if (summary.apiKeyLimit > 0 && summary.activeApiKeys >= summary.apiKeyLimit) {
+    alerts.push({
+      id: "api-keys-limit",
+      tone: "limit",
+      title: "API key limit reached",
+      body: `This plan includes up to ${formatCount(summary.apiKeyLimit)} API keys. Revoke an unused key or request Pilot Pro.`,
+    })
+  }
+  return alerts
+}
+
+function buildResourceAlerts(input: {
+  key: string
+  label: string
+  planLabel: string
+  used: number
+  limit: number
+  warningThresholdPercent: number
+  criticalThresholdPercent: number
+  resetAtLabel: string
+}): UsageAlert[] {
+  if (input.limit <= 0) {
+    return []
+  }
+  const percent = (input.used / input.limit) * 100
+  if (input.used >= input.limit) {
+    return [
+      {
+        id: `${input.key}-limit`,
+        tone: "limit",
+        title: `Monthly ${input.label} reached`,
+        body: `Requests are blocked on ${input.planLabel} until ${input.resetAtLabel}. Request Pilot Pro for higher limits.`,
+      },
+    ]
+  }
+  if (percent >= input.criticalThresholdPercent) {
+    return [
+      {
+        id: `${input.key}-critical`,
+        tone: "critical",
+        title: `Heads up: ${input.label} almost exhausted`,
+        body: `Only ${formatCount(input.limit - input.used)} requests left this month on ${input.planLabel}.`,
+      },
+    ]
+  }
+  if (percent >= input.warningThresholdPercent) {
+    return [
+      {
+        id: `${input.key}-warning`,
+        tone: "warning",
+        title: `You're at ${Math.round(percent)}% of your monthly ${input.label}`,
+        body: `You're close to the ${input.planLabel} limit. Request Pilot Pro now to avoid interruptions.`,
+      },
+    ]
+  }
+  return []
+}
+
+function buildPilotProRequestHref(summary: UsageSummary | null): string {
+  const contactEmail = getPilotProContactEmail()
+  const subject = "Orbit Pilot Pro request"
+  const body = summary
+    ? [
+        "Hi Orbit team,",
+        "",
+        "I want Pilot Pro access.",
+        "",
+        `Plan: ${summary.planLabel}`,
+        `Ingest usage: ${summary.ingestUsed}/${summary.ingestLimit}`,
+        `Retrieve usage: ${summary.retrieveUsed}/${summary.retrieveLimit}`,
+        `Active API keys: ${summary.activeApiKeys}/${summary.apiKeyLimit}`,
+      ].join("\n")
+    : "Hi Orbit team,\n\nI want Pilot Pro access."
+  return `mailto:${contactEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+}
+
+function resolveLimit(primary: number | null | undefined, fallback: number): number {
+  const primaryNumber = sanitizeCount(primary ?? 0)
+  if (primaryNumber > 0) {
+    return primaryNumber
+  }
+  return sanitizeCount(fallback)
+}
+
+function resolveMonthlyLimit(
+  monthly: number | null | undefined,
+  daily: number,
+): number {
+  const monthlyLimit = sanitizeCount(monthly ?? 0)
+  if (monthlyLimit > 0) {
+    return monthlyLimit
+  }
+  const dailyLimit = sanitizeCount(daily)
+  if (dailyLimit <= 0) {
+    return 0
+  }
+  return dailyLimit * 30
+}
+
+function defaultApiKeyLimitForPlan(planCode: string): number {
+  if (planCode === "pilot_pro") {
+    return 25
+  }
+  return 3
+}
+
+function sanitizeCount(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+  return Math.max(0, Math.floor(value))
+}
+
+function sanitizePercent(value: number | null | undefined, fallback: number): number {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return fallback
+  }
+  const normalized = Math.floor(value)
+  if (normalized < 1 || normalized > 100) {
+    return fallback
+  }
+  return normalized
+}
+
+function normalizeOptionalString(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null
+  }
+  const normalized = value.trim()
+  return normalized.length > 0 ? normalized : null
+}
+
+function formatCount(value: number): string {
+  return sanitizeCount(value).toLocaleString()
+}
+
+function formatDurationSeconds(value: number): string {
+  const totalSeconds = sanitizeCount(value)
+  const days = Math.floor(totalSeconds / 86400)
+  const hours = Math.floor((totalSeconds % 86400) / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  if (days > 0) {
+    return `${days}d ${hours}h`
+  }
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`
+  }
+  return `${minutes}m`
 }
 
 function uniqueScopes(scopes: string[]): string[] {
@@ -868,3 +1392,4 @@ function describeAuthError(code: string): string {
   }
   return "Authentication flow failed. Retry sign-in."
 }
+

@@ -24,6 +24,8 @@ def _build_app(tmp_path: Path):
         sqlite_fallback_path=str(db_path),
         free_events_per_day=100,
         free_queries_per_day=500,
+        free_events_per_month=100,
+        free_queries_per_month=500,
         jwt_secret=JWT_SECRET,
         jwt_issuer=JWT_ISSUER,
         jwt_audience=JWT_AUDIENCE,
@@ -378,6 +380,55 @@ def test_api_dashboard_keys_rotate_and_paginate(tmp_path: Path) -> None:
             }
             new_key_status = await client.get("/v1/status", headers=new_key_headers)
             assert new_key_status.status_code == 200
+
+    asyncio.run(_run())
+
+
+def test_api_dashboard_keys_enforce_plan_key_cap(tmp_path: Path) -> None:
+    async def _run() -> None:
+        db_path = tmp_path / "orbit_api_key_cap.db"
+        api_config = ApiConfig(
+            database_url=f"sqlite:///{db_path}",
+            sqlite_fallback_path=str(db_path),
+            free_events_per_month=100,
+            free_queries_per_month=100,
+            free_api_keys=1,
+            jwt_secret=JWT_SECRET,
+            jwt_issuer=JWT_ISSUER,
+            jwt_audience=JWT_AUDIENCE,
+        )
+        engine_config = EngineConfig(
+            sqlite_path=str(db_path),
+            database_url=f"sqlite:///{db_path}",
+            embedding_dim=32,
+            persistent_confidence_prior=0.0,
+            ephemeral_confidence_prior=0.0,
+        )
+        app = create_app(api_config=api_config, engine_config=engine_config)
+        transport = httpx.ASGITransport(app=app)
+        jwt_headers = {
+            "Authorization": f"Bearer {_jwt_token(subject='cap-user')}",
+        }
+
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            first = await client.post(
+                "/v1/dashboard/keys",
+                headers=jwt_headers,
+                json={"name": "cap-1", "scopes": ["read", "write"]},
+            )
+            assert first.status_code == 201
+
+            second = await client.post(
+                "/v1/dashboard/keys",
+                headers=jwt_headers,
+                json={"name": "cap-2", "scopes": ["read", "write"]},
+            )
+            assert second.status_code == 429
+            detail = second.json()["detail"]
+            assert detail["error_code"] == "quota_api_keys_exceeded"
 
     asyncio.run(_run())
 

@@ -94,6 +94,9 @@ OLLAMA_MODEL=llama3.1`}
         language="bash"
         filename="terminal"
       />
+      <p className="text-muted-foreground text-sm leading-relaxed mt-4">
+        Cloud route alternative: get <code className="text-primary">ORBIT_API_KEY</code> from <a href="/dashboard" className="text-primary hover:underline">Dashboard</a> and set <code className="text-primary">ORBIT_BASE_URL</code> to your hosted endpoint.
+      </p>
 
       <h2 className="text-2xl font-bold text-foreground mb-4 mt-12">Live Product Simulations</h2>
       <div className="grid grid-cols-1 gap-px bg-border mb-12">

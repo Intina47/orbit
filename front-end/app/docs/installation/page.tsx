@@ -75,7 +75,7 @@ export default function InstallationPage() {
       <h3 className="text-lg font-bold text-foreground mb-3">2) Add project env</h3>
       <CodeBlock
         code={`ORBIT_API_KEY=orbit_pk_your_key_here
-ORBIT_BASE_URL=https://api.orbit.dev`}
+ORBIT_BASE_URL=https://orbit-api-ic4qh4dzga-uc.a.run.app`}
         language="bash"
         filename=".env"
       />
@@ -87,7 +87,7 @@ from orbit import MemoryEngine
 
 engine = MemoryEngine(
     api_key=os.getenv("ORBIT_API_KEY"),
-    base_url=os.getenv("ORBIT_BASE_URL", "https://api.orbit.dev"),
+    base_url=os.getenv("ORBIT_BASE_URL", "https://orbit-api-ic4qh4dzga-uc.a.run.app"),
 )`}
         language="python"
         filename="app.py"

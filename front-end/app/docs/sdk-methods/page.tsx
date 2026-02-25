@@ -13,6 +13,12 @@ export default function SdkMethodsPage() {
       <p className="text-muted-foreground text-base leading-relaxed max-w-xl mb-12">
         Usage details for <code className="text-primary">MemoryEngine</code> and <code className="text-primary">AsyncMemoryEngine</code>.
       </p>
+      <div className="border border-primary/30 bg-primary/5 p-6 mb-12">
+        <h3 className="text-sm font-bold text-primary mb-2">Need credentials first?</h3>
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          Orbit Cloud: create your API key in <a href="/dashboard" className="text-primary hover:underline">Dashboard</a>. Self-hosted: use your JWT token and local base URL.
+        </p>
+      </div>
 
       {/* ingest */}
       <div className="mb-12">

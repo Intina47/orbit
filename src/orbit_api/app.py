@@ -21,7 +21,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
-from starlette.responses import PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.types import ExceptionHandler
 
 from memory_engine.config import EngineConfig
@@ -55,6 +55,7 @@ from orbit_api.service import (
     ApiKeyAuthenticationError,
     IdempotencyConflictError,
     OrbitApiService,
+    PlanQuotaExceededError,
     RateLimitExceededError,
     RateLimitSnapshot,
 )
@@ -104,6 +105,7 @@ def create_app(
                 "X-RateLimit-Reset",
                 "Retry-After",
                 "X-Idempotency-Replayed",
+                "X-Orbit-Error-Code",
             ],
         )
 
@@ -114,9 +116,31 @@ def create_app(
     )
     app.state.limiter = limiter
     app.state.rate_limit = config.per_minute_limit
+    def slowapi_rate_limit_handler(
+        request: Request,
+        exc: RateLimitExceeded,
+    ) -> JSONResponse:
+        base_response = cast(
+            JSONResponse,
+            _rate_limit_exceeded_handler(request, exc),
+        )
+        response = JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content={
+                "detail": {
+                    "message": "Too many requests. Retry after the rate-limit window resets.",
+                    "error_code": "rate_limit_exceeded",
+                }
+            },
+        )
+        for key, value in base_response.headers.items():
+            response.headers[key] = value
+        response.headers["X-Orbit-Error-Code"] = "rate_limit_exceeded"
+        return response
+
     app.add_exception_handler(
         RateLimitExceeded,
-        cast(ExceptionHandler, _rate_limit_exceeded_handler),
+        cast(ExceptionHandler, slowapi_rate_limit_handler),
     )
     app.add_middleware(SlowAPIMiddleware)
 
@@ -505,6 +529,8 @@ def create_app(
                 scopes=payload.scopes,
                 actor_subject=_actor_subject(auth),
             )
+        except PlanQuotaExceededError as exc:
+            raise _plan_quota_exception(exc) from exc
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -706,9 +732,24 @@ def _rate_limit_exception(exc: RateLimitExceededError) -> HTTPException:
     headers = {
         **exc.snapshot.as_headers(),
         "Retry-After": str(exc.retry_after_seconds),
+        "X-Orbit-Error-Code": exc.error_code,
     }
     return HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        detail="Rate limit exceeded.",
+        detail={
+            "message": exc.detail,
+            "error_code": exc.error_code,
+        },
         headers=headers,
+    )
+
+
+def _plan_quota_exception(exc: PlanQuotaExceededError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail={
+            "message": exc.detail,
+            "error_code": exc.error_code,
+        },
+        headers={"X-Orbit-Error-Code": exc.error_code},
     )

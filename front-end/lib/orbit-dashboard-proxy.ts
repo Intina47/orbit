@@ -10,6 +10,7 @@ const FORWARDED_HEADERS = [
   "x-ratelimit-reset",
   "retry-after",
   "x-idempotency-replayed",
+  "x-orbit-error-code",
 ] as const
 
 const NO_STORE_HEADERS = {
@@ -23,6 +24,7 @@ type ProxyRequestOptions = {
   path: string
   method: ProxyMethod
   body?: string
+  acceptHeader?: string
   requiredScopes?: readonly string[]
   auditAction?: string
 }
@@ -47,7 +49,7 @@ export async function proxyDashboardRequest(
 
   const headers = new Headers()
   headers.set("Authorization", `Bearer ${authResolution.token}`)
-  headers.set("Accept", "application/json")
+  headers.set("Accept", options.acceptHeader ?? "application/json")
   headers.set("X-Orbit-Proxy-Source", "dashboard-web")
   if (options.body !== undefined) {
     headers.set("Content-Type", "application/json")
@@ -62,12 +64,22 @@ export async function proxyDashboardRequest(
       cache: "no-store",
     })
   } catch (error) {
+    const safeTarget = targetUrl.replace(/\/+$/, "")
+    const detail =
+      process.env.NODE_ENV === "production"
+        ? "Orbit API is unreachable from dashboard proxy."
+        : `Orbit API is unreachable from dashboard proxy (target: ${safeTarget}).`
     logDashboardAuthEvent("dashboard_proxy_upstream_unreachable", options.request, {
       target: `${targetUrl}${options.path}`,
       detail: error instanceof Error ? error.message : String(error),
     })
     return NextResponse.json(
-      { detail: "Orbit API is unreachable from dashboard proxy." },
+      {
+        detail: {
+          message: detail,
+          error_code: "dashboard_proxy_upstream_unreachable",
+        },
+      },
       { status: 502, headers: NO_STORE_HEADERS },
     )
   }

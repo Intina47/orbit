@@ -227,6 +227,12 @@ def _raise_for_status(response: httpx.Response) -> None:
 def _error_message(response: httpx.Response) -> str:
     payload = _parse_payload(response)
     if isinstance(payload, dict):
+        detail_payload = payload.get("detail")
+        if isinstance(detail_payload, dict):
+            for key in ("message", "detail", "error"):
+                value = detail_payload.get(key)
+                if isinstance(value, str) and value:
+                    return value
         for key in ("detail", "message", "error"):
             value = payload.get(key)
             if isinstance(value, str) and value:

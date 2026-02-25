@@ -13,7 +13,7 @@ class Config(BaseModel):
     """Runtime configuration for sync and async SDK clients."""
 
     api_key: str | None = None
-    base_url: str = "https://api.orbit.dev"
+    base_url: str = "https://orbit-api-ic4qh4dzga-uc.a.run.app"
     timeout_seconds: float = 30.0
     max_retries: int = 3
     retry_backoff_factor: float = 2.0
@@ -58,7 +58,7 @@ class Config(BaseModel):
     def from_env(cls) -> Config:
         return cls(
             api_key=os.getenv("ORBIT_API_KEY"),
-            base_url=os.getenv("ORBIT_BASE_URL", "https://api.orbit.dev"),
+            base_url=os.getenv("ORBIT_BASE_URL", "https://orbit-api-ic4qh4dzga-uc.a.run.app"),
             timeout_seconds=_env_float("ORBIT_TIMEOUT", 30.0),
             max_retries=_env_int("ORBIT_MAX_RETRIES", 3),
             retry_backoff_factor=_env_float("ORBIT_RETRY_BACKOFF_FACTOR", 2.0),

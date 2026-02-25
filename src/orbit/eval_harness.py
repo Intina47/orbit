@@ -70,6 +70,8 @@ def run_evaluation(
         sqlite_fallback_path=str(sqlite_path),
         free_events_per_day=1_000_000,
         free_queries_per_day=1_000_000,
+        free_events_per_month=1_000_000,
+        free_queries_per_month=1_000_000,
     )
     engine_config = EngineConfig(
         sqlite_path=str(sqlite_path),

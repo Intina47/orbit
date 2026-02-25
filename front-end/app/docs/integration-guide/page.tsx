@@ -15,6 +15,12 @@ export default function IntegrationGuidePage() {
       <p className="text-muted-foreground text-base leading-relaxed max-w-xl mb-12">
         The practical Orbit contract for production apps. Keep this loop tight and your memory quality will climb instead of drift.
       </p>
+      <div className="border border-primary/30 bg-primary/5 p-6 mb-12">
+        <h3 className="text-sm font-bold text-primary mb-2">Credential note</h3>
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          If you run Orbit Cloud, create an API key in <a href="/dashboard" className="text-primary hover:underline">Dashboard</a> and pass it as <code className="text-primary">api_key</code>. For self-hosted, use JWT.
+        </p>
+      </div>
 
       {/* Core contract */}
       <h2 className="text-2xl font-bold text-foreground mb-4">Core integration contract</h2>

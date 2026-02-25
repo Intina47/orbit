@@ -26,6 +26,8 @@ def _build_app(tmp_path: Path):
         sqlite_fallback_path=str(db_path),
         free_events_per_day=100,
         free_queries_per_day=500,
+        free_events_per_month=100,
+        free_queries_per_month=500,
         jwt_secret=JWT_SECRET,
         jwt_issuer=JWT_ISSUER,
         jwt_audience=JWT_AUDIENCE,

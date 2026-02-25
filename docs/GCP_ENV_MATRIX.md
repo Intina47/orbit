@@ -18,7 +18,7 @@ This matrix defines the recommended environment contract for Cloud Run deploymen
 | `ORBIT_JWT_ALGORITHM` | `HS256` | JWT verification algorithm. |
 | `ORBIT_JWT_ISSUER` | `orbit` | Required JWT issuer claim. |
 | `ORBIT_JWT_AUDIENCE` | `orbit-api` | Required JWT audience claim. |
-| `ORBIT_CORS_ALLOW_ORIGINS` | `https://app.orbit.dev` | Browser origin allowlist (comma-separated if multiple). |
+| `ORBIT_CORS_ALLOW_ORIGINS` | `https://orbit-memory.vercel.app` | Browser origin allowlist (comma-separated if multiple). |
 
 ## API runtime and quota defaults
 
@@ -26,8 +26,15 @@ This matrix defines the recommended environment contract for Cloud Run deploymen
 | --- | --- | --- |
 | `ORBIT_API_HOST` | `0.0.0.0` | Cloud Run bind address. |
 | `ORBIT_API_PORT` | `8000` | Container internal port. |
-| `ORBIT_RATE_LIMIT_EVENTS_PER_DAY` | `1000` | Per-account daily ingest quota. |
-| `ORBIT_RATE_LIMIT_QUERIES_PER_DAY` | `5000` | Per-account daily query quota. |
+| `ORBIT_RATE_LIMIT_EVENTS_PER_MONTH` | `10000` | Free plan monthly ingest quota per account. |
+| `ORBIT_RATE_LIMIT_QUERIES_PER_MONTH` | `50000` | Free plan monthly retrieve quota per account. |
+| `ORBIT_RATE_LIMIT_FREE_API_KEYS` | `3` | Free plan active API key cap per account. |
+| `ORBIT_RATE_LIMIT_PILOT_PRO_EVENTS_PER_MONTH` | `250000` | Pilot Pro monthly ingest quota. |
+| `ORBIT_RATE_LIMIT_PILOT_PRO_QUERIES_PER_MONTH` | `1000000` | Pilot Pro monthly retrieve quota. |
+| `ORBIT_RATE_LIMIT_PILOT_PRO_API_KEYS` | `25` | Pilot Pro active API key cap. |
+| `ORBIT_PILOT_PRO_ACCOUNT_KEYS` | `acct_team_a,acct_team_b` | Comma-separated allowlist for invite-only Pilot Pro accounts. |
+| `ORBIT_USAGE_WARNING_THRESHOLD_PERCENT` | `80` | Usage warning threshold for dashboard prompts. |
+| `ORBIT_USAGE_CRITICAL_THRESHOLD_PERCENT` | `95` | Usage critical threshold for dashboard prompts. |
 | `ORBIT_RATE_LIMIT_PER_MINUTE` | `300/minute` | Request throttle (slowapi). |
 | `ORBIT_MAX_INGEST_CONTENT_CHARS` | `20000` | Per-event content hard cap. |
 | `ORBIT_MAX_QUERY_CHARS` | `2000` | Query string hard cap. |

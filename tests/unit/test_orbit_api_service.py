@@ -18,6 +18,7 @@ from orbit_api.service import (
     ApiKeyAuthenticationError,
     IdempotencyConflictError,
     OrbitApiService,
+    PlanQuotaExceededError,
     RateLimitExceededError,
 )
 
@@ -29,6 +30,8 @@ def _service(tmp_path: Path) -> OrbitApiService:
         sqlite_fallback_path=str(db_path),
         free_events_per_day=2,
         free_queries_per_day=2,
+        free_events_per_month=2,
+        free_queries_per_month=2,
     )
     engine_config = EngineConfig(
         sqlite_path=str(db_path),
@@ -114,6 +117,9 @@ def test_service_ingest_retrieve_feedback_and_status(tmp_path: Path) -> None:
         status = service.status(api_key)
         assert status.connected is True
         assert status.account_usage.storage_usage_mb >= 0.0
+        assert status.account_usage.quota.plan == "free"
+        assert status.account_usage.quota.events_per_month == 2
+        assert status.account_usage.quota.queries_per_month == 2
 
         paged = service.list_memories(limit=10, cursor=None)
         assert paged.data
@@ -356,6 +362,41 @@ def test_service_issue_list_and_authenticate_api_key(tmp_path: Path) -> None:
 
         listed_after = service.list_api_keys(account_key="acct_dash")
         assert listed_after.data[0].last_used_at is not None
+    finally:
+        service.close()
+
+
+def test_service_api_key_limit_enforced_by_plan(tmp_path: Path) -> None:
+    db_path = tmp_path / "key_limit.db"
+    api_config = ApiConfig(
+        database_url=f"sqlite:///{db_path}",
+        sqlite_fallback_path=str(db_path),
+        free_events_per_month=100,
+        free_queries_per_month=100,
+        free_api_keys=1,
+        pilot_pro_events_per_month=100,
+        pilot_pro_queries_per_month=100,
+        pilot_pro_api_keys=2,
+        pilot_pro_account_keys=["acct_pro"],
+    )
+    engine_config = EngineConfig(
+        sqlite_path=str(db_path),
+        database_url=f"sqlite:///{db_path}",
+        embedding_dim=16,
+        persistent_confidence_prior=0.0,
+        ephemeral_confidence_prior=0.0,
+    )
+    service = OrbitApiService(api_config=api_config, engine_config=engine_config)
+    try:
+        _ = service.issue_api_key(account_key="acct_free", name="free-1", scopes=["read"])
+        with pytest.raises(PlanQuotaExceededError) as exc_info:
+            service.issue_api_key(account_key="acct_free", name="free-2", scopes=["read"])
+        assert exc_info.value.error_code == "quota_api_keys_exceeded"
+
+        _ = service.issue_api_key(account_key="acct_pro", name="pro-1", scopes=["read"])
+        _ = service.issue_api_key(account_key="acct_pro", name="pro-2", scopes=["read"])
+        with pytest.raises(PlanQuotaExceededError):
+            service.issue_api_key(account_key="acct_pro", name="pro-3", scopes=["read"])
     finally:
         service.close()
 

@@ -70,9 +70,11 @@ export default function DeploymentPage() {
         Browser clients never receive Orbit API bearer credentials. Next.js proxy routes exchange dashboard sessions for short-lived tenant-scoped JWTs.
       </p>
       <CodeBlock
-        code={`NEXT_PUBLIC_ORBIT_API_BASE_URL=https://api.your-orbit-domain.com
+        code={`NEXT_PUBLIC_ORBIT_API_BASE_URL=https://orbit-api-ic4qh4dzga-uc.a.run.app
+# Optional dashboard CTA destination:
+# NEXT_PUBLIC_ORBIT_PILOT_PRO_CONTACT_EMAIL=hello@theorbit.dev
 # Optional if different from NEXT_PUBLIC_ORBIT_API_BASE_URL:
-# ORBIT_DASHBOARD_PROXY_BASE_URL=https://api.your-orbit-domain.com
+# ORBIT_DASHBOARD_PROXY_BASE_URL=https://orbit-api-ic4qh4dzga-uc.a.run.app
 ORBIT_DASHBOARD_PROXY_AUTH_MODE=exchange
 ORBIT_DASHBOARD_ORBIT_JWT_SECRET=<same-secret-as-orbit-api-jwt-verifier>
 # Optional exchange controls:
@@ -97,7 +99,23 @@ ORBIT_DASHBOARD_SESSION_SECRET=<long-random-secret>
         If frontend and API are on different domains, allow your Vercel origin in backend CORS:
       </p>
       <CodeBlock
-        code={`ORBIT_CORS_ALLOW_ORIGINS=https://your-app.vercel.app`}
+        code={`ORBIT_CORS_ALLOW_ORIGINS=https://orbit-memory.vercel.app`}
+        language="bash"
+        filename="orbit-api.env"
+      />
+      <p className="text-muted-foreground text-sm leading-relaxed mt-4 mb-4">
+        Plan quota controls (Free + invite-only Pilot Pro):
+      </p>
+      <CodeBlock
+        code={`ORBIT_RATE_LIMIT_EVENTS_PER_MONTH=10000
+ORBIT_RATE_LIMIT_QUERIES_PER_MONTH=50000
+ORBIT_RATE_LIMIT_FREE_API_KEYS=3
+ORBIT_RATE_LIMIT_PILOT_PRO_EVENTS_PER_MONTH=250000
+ORBIT_RATE_LIMIT_PILOT_PRO_QUERIES_PER_MONTH=1000000
+ORBIT_RATE_LIMIT_PILOT_PRO_API_KEYS=25
+ORBIT_PILOT_PRO_ACCOUNT_KEYS=acct_team_a,acct_team_b
+ORBIT_USAGE_WARNING_THRESHOLD_PERCENT=80
+ORBIT_USAGE_CRITICAL_THRESHOLD_PERCENT=95`}
         language="bash"
         filename="orbit-api.env"
       />

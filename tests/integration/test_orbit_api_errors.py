@@ -24,6 +24,8 @@ def _build_app(tmp_path: Path, *, cors_allow_origins: list[str] | None = None):
         sqlite_fallback_path=str(db_path),
         free_events_per_day=1,
         free_queries_per_day=1,
+        free_events_per_month=1,
+        free_queries_per_month=1,
         jwt_secret=JWT_SECRET,
         jwt_issuer=JWT_ISSUER,
         jwt_audience=JWT_AUDIENCE,
@@ -93,6 +95,8 @@ def test_api_auth_and_rate_limit_errors(tmp_path: Path) -> None:
                 json={"content": "hello again", "event_type": "user_question"},
             )
             assert second.status_code == 429
+            second_detail = second.json()["detail"]
+            assert second_detail["error_code"] == "quota_ingest_monthly_exceeded"
             assert "Retry-After" in second.headers
             assert "1" in second.headers["X-RateLimit-Limit"]
 

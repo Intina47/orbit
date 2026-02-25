@@ -24,6 +24,9 @@ export default function QuickstartPage() {
         <p className="text-sm text-muted-foreground leading-relaxed">
           First choose your installation route on <a href="/docs/installation" className="text-primary hover:underline">Installation & Setup</a>: Orbit Cloud (API key) or Self-Hosted Orbit (local JWT + local API URL).
         </p>
+        <p className="text-sm text-muted-foreground leading-relaxed mt-3">
+          Using Orbit Cloud? Create your API key in <a href="/dashboard" className="text-primary hover:underline">Dashboard</a>, then set <code className="text-primary">ORBIT_API_KEY</code>.
+        </p>
       </div>
 
       {/* Step 1 */}

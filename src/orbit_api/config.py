@@ -17,8 +17,20 @@ class ApiConfig(BaseModel):
     sqlite_fallback_path: str = "memory.db"
     default_entity_id: str = "global"
     default_event_type: str = "generic_event"
+    # Legacy daily values retained for backward compatibility in status responses.
     free_events_per_day: int = 100
     free_queries_per_day: int = 500
+    free_events_per_month: int = 10_000
+    free_queries_per_month: int = 50_000
+    free_api_keys: int = 3
+    free_retention_days: int = 30
+    pilot_pro_events_per_month: int = 250_000
+    pilot_pro_queries_per_month: int = 1_000_000
+    pilot_pro_api_keys: int = 25
+    pilot_pro_retention_days: int = 180
+    pilot_pro_account_keys: list[str] = []
+    usage_warning_threshold_percent: int = 80
+    usage_critical_threshold_percent: int = 95
     per_minute_limit: str = "1000/minute"
     dashboard_key_per_minute_limit: str = "60/minute"
     max_ingest_content_chars: int = 20_000
@@ -80,6 +92,16 @@ class ApiConfig(BaseModel):
     @field_validator(
         "free_events_per_day",
         "free_queries_per_day",
+        "free_events_per_month",
+        "free_queries_per_month",
+        "free_api_keys",
+        "free_retention_days",
+        "pilot_pro_events_per_month",
+        "pilot_pro_queries_per_month",
+        "pilot_pro_api_keys",
+        "pilot_pro_retention_days",
+        "usage_warning_threshold_percent",
+        "usage_critical_threshold_percent",
         "max_ingest_content_chars",
         "max_query_chars",
         "max_batch_items",
@@ -90,6 +112,21 @@ class ApiConfig(BaseModel):
             msg = "limit values must be positive integers"
             raise ValueError(msg)
         return value
+
+    @field_validator("pilot_pro_account_keys", mode="before")
+    @classmethod
+    def parse_pilot_pro_account_keys(
+        cls,
+        value: str | list[str] | None,
+    ) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        msg = "pilot_pro_account_keys must be a string or list of strings"
+        raise ValueError(msg)
 
     @field_validator("environment")
     @classmethod
@@ -122,6 +159,15 @@ class ApiConfig(BaseModel):
         ):
             msg = "ORBIT_JWT_SECRET must be set to a non-default value in production"
             raise ValueError(msg)
+        if self.usage_warning_threshold_percent >= self.usage_critical_threshold_percent:
+            msg = (
+                "ORBIT_USAGE_WARNING_THRESHOLD_PERCENT must be less than "
+                "ORBIT_USAGE_CRITICAL_THRESHOLD_PERCENT"
+            )
+            raise ValueError(msg)
+        if self.usage_critical_threshold_percent > 100:
+            msg = "ORBIT_USAGE_CRITICAL_THRESHOLD_PERCENT must be <= 100"
+            raise ValueError(msg)
         return self
 
     @classmethod
@@ -135,14 +181,56 @@ class ApiConfig(BaseModel):
         )
         if database_url is None:
             database_url = "postgresql+psycopg://orbit:orbit@postgres:5432/orbit"
+        legacy_events_raw = _env_optional("ORBIT_RATE_LIMIT_EVENTS_PER_DAY")
+        legacy_queries_raw = _env_optional("ORBIT_RATE_LIMIT_QUERIES_PER_DAY")
+        legacy_events_per_day = _env_int("ORBIT_RATE_LIMIT_EVENTS_PER_DAY", 100)
+        legacy_queries_per_day = _env_int("ORBIT_RATE_LIMIT_QUERIES_PER_DAY", 500)
+        events_per_month = _env_int_optional("ORBIT_RATE_LIMIT_EVENTS_PER_MONTH")
+        queries_per_month = _env_int_optional("ORBIT_RATE_LIMIT_QUERIES_PER_MONTH")
+        if events_per_month is None:
+            if legacy_events_raw is not None:
+                events_per_month = max(legacy_events_per_day * 30, 1)
+            else:
+                events_per_month = 10_000
+        if queries_per_month is None:
+            if legacy_queries_raw is not None:
+                queries_per_month = max(legacy_queries_per_day * 30, 1)
+            else:
+                queries_per_month = 50_000
         return cls(
             api_version=os.getenv("ORBIT_API_VERSION", "1.0.0"),
             database_url=database_url,
             sqlite_fallback_path=fallback_path,
             default_entity_id=os.getenv("ORBIT_DEFAULT_ENTITY_ID", "global"),
             default_event_type=os.getenv("ORBIT_DEFAULT_EVENT_TYPE", "generic_event"),
-            free_events_per_day=_env_int("ORBIT_RATE_LIMIT_EVENTS_PER_DAY", 100),
-            free_queries_per_day=_env_int("ORBIT_RATE_LIMIT_QUERIES_PER_DAY", 500),
+            free_events_per_day=legacy_events_per_day,
+            free_queries_per_day=legacy_queries_per_day,
+            free_events_per_month=events_per_month,
+            free_queries_per_month=queries_per_month,
+            free_api_keys=_env_int("ORBIT_RATE_LIMIT_FREE_API_KEYS", 3),
+            free_retention_days=_env_int("ORBIT_RATE_LIMIT_FREE_RETENTION_DAYS", 30),
+            pilot_pro_events_per_month=_env_int(
+                "ORBIT_RATE_LIMIT_PILOT_PRO_EVENTS_PER_MONTH",
+                250_000,
+            ),
+            pilot_pro_queries_per_month=_env_int(
+                "ORBIT_RATE_LIMIT_PILOT_PRO_QUERIES_PER_MONTH",
+                1_000_000,
+            ),
+            pilot_pro_api_keys=_env_int("ORBIT_RATE_LIMIT_PILOT_PRO_API_KEYS", 25),
+            pilot_pro_retention_days=_env_int(
+                "ORBIT_RATE_LIMIT_PILOT_PRO_RETENTION_DAYS",
+                180,
+            ),
+            pilot_pro_account_keys=_env_csv("ORBIT_PILOT_PRO_ACCOUNT_KEYS"),
+            usage_warning_threshold_percent=_env_int(
+                "ORBIT_USAGE_WARNING_THRESHOLD_PERCENT",
+                80,
+            ),
+            usage_critical_threshold_percent=_env_int(
+                "ORBIT_USAGE_CRITICAL_THRESHOLD_PERCENT",
+                95,
+            ),
             per_minute_limit=os.getenv("ORBIT_RATE_LIMIT_PER_MINUTE", "1000/minute"),
             dashboard_key_per_minute_limit=os.getenv(
                 "ORBIT_DASHBOARD_KEY_RATE_LIMIT_PER_MINUTE",
@@ -193,6 +281,16 @@ def _env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _env_int_optional(name: str) -> int | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def _env_float(name: str, default: float) -> float:

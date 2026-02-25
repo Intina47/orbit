@@ -104,12 +104,21 @@ class FeedbackResponse(OrbitModel):
 class AccountQuota(OrbitModel):
     events_per_day: int
     queries_per_day: int
+    events_per_month: int | None = None
+    queries_per_month: int | None = None
+    api_keys: int | None = None
+    retention_days: int | None = None
+    plan: str | None = None
+    reset_at: datetime | None = None
+    warning_threshold_percent: int | None = None
+    critical_threshold_percent: int | None = None
 
 
 class AccountUsage(OrbitModel):
     events_ingested_this_month: int
     queries_this_month: int
     storage_usage_mb: float
+    active_api_keys: int | None = None
     quota: AccountQuota
 
 
