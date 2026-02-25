@@ -1,4 +1,5 @@
 import Link from "next/link"
+import { CodeBlock } from "@/components/orbit/code-block"
 
 const sections = [
   {
@@ -47,6 +48,11 @@ const sections = [
       { label: "Troubleshooting", href: "/docs/troubleshooting" },
     ],
   },
+  {
+    title: "Metadata & Keywords",
+    description: "See the stack, keywords, and docs signals we highlight for SEO/clarity.",
+    links: [{ label: "Metadata Blueprint", href: "/docs/metadata" }],
+  },
 ]
 
 export default function DocsOverview() {
@@ -78,9 +84,26 @@ export default function DocsOverview() {
         </div>
       </div>
 
-      <div className="border border-primary/30 bg-primary/5 p-4 mb-16">
-        <p className="text-xs text-muted-foreground leading-relaxed">
-          Need code generated for your stack? Use the floating <span className="text-primary font-semibold">Setup with AI</span> button on this page to build a ready-to-paste prompt for ChatGPT, Claude, or Cursor.
+      <div className="border border-primary/30 bg-primary/5 p-6 mb-12 rounded-3xl shadow-[0_0_60px_rgba(255,255,255,0.08)]">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground">Orbit Setup Lab</p>
+            <p className="text-sm text-foreground font-semibold">Floating AI-assisted onboarding</p>
+          </div>
+          <span className="px-3 py-1 rounded-full bg-primary/10 text-primary text-xs">Marvelous tone</span>
+        </div>
+        <p className="text-xs text-muted-foreground mb-4">
+          Tap the <span className="text-primary font-semibold">Setup with AI</span> helper that trails this page. Tell it your runtime (Cloud, Self-hosted, hybrid), your adapter, and we will build the exact prompt to copy into ChatGPT, Claude, or Cursor.
+        </p>
+        <CodeBlock
+          code={`Prompt blueprint:
+"Generate an Orbit MemoryEngine init snippet in Python using the Ollama adapter. Show ingest + retrieve call for entity_id 'alice' with conflict-aware metadata."
+`}
+          language="text"
+          filename="prompt.txt"
+        />
+        <p className="text-xs text-muted-foreground mt-4">
+          This keeps the docs humane and playful; the AI takes care of the boilerplate while you focus on the behavior you want.
         </p>
       </div>
 

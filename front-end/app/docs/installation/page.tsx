@@ -43,6 +43,28 @@ export default function InstallationPage() {
         ))}
       </div>
 
+      <div className="border border-border rounded-3xl p-6 mb-10 bg-surface/30">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs uppercase tracking-[0.4em] text-muted-foreground">Setup with AI</span>
+          <span className="text-xs text-primary font-semibold">Ready-to-copy prompt</span>
+        </div>
+        <p className="text-sm text-foreground font-semibold mb-3">Tell the AI exactly what orbit.your stack looks like</p>
+        <p className="text-xs text-muted-foreground mb-4">
+          Hit the floating AI helper or this block directly. Mention your route (<strong>Cloud</strong> vs <strong>Self-hosted</strong>), preferred adapter, and mention verified metadata (fact inference + contradiction guard). The assistant returns a complete snippet you can drop into your repo.
+        </p>
+        <CodeBlock
+          code={`Prompt:
+Build a Python Orbit integration (MemoryEngine) with the Ollama adapter.
+Include ingest + retrieve calls for entity_id 'alice' and show how to tag conflict guards.
+Document .env vars needed for Cloud or Local runtimes.`}
+          language="text"
+          filename="setup-prompt.txt"
+        />
+        <p className="text-xs text-muted-foreground mt-3">
+          Need extra context? The <a href="/docs/metadata" className="text-primary hover:underline">metadata blueprint</a> outlines every keyword and stack component that keeps your prompt sharp and SEO-ready.
+        </p>
+      </div>
+
       {/* Common step */}
       <h2 className="text-2xl font-bold text-foreground mb-4">Step 0 (Common): Install SDK</h2>
       <CodeBlock code="pip install orbit-memory" language="bash" filename="terminal" />
@@ -164,6 +186,48 @@ engine = MemoryEngine(
         language="python"
         filename="app.py"
       />
+
+      <h2 className="text-2xl font-bold text-foreground mb-4 mt-12">Usage paths afterwards</h2>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-12">
+        {[
+          {
+            title: "Orbit Cloud (API-first)",
+            points: [
+              "SDK talks directly to Orbit API; no infra for you to manage.",
+              "Use `ORBIT_API_KEY` from the dashboard, skip JWT wiring.",
+              "Great for pilot projects that scale from 0→100 users quickly.",
+            ],
+          },
+          {
+            title: "Self-hosted + Local QA",
+            points: [
+              "Run Docker compose, connect SDK to `localhost:8000`.",
+              "Use generated JWT tokens for auth and keep data in your Postgres.",
+              "Perfect for offline demos or security-heavy environments.",
+            ],
+          },
+          {
+            title: "Hybrid (ship data, keep keys local)",
+            points: [
+              "Ingest events via Orbit Cloud, host retrieval workers nearby.",
+              "Use metadata tags to route conflict-guarded facts to safer prompts.",
+              "Let Orbit learn personalization while you control audit logs.",
+            ],
+          },
+        ].map((item) => (
+          <div key={item.title} className="bg-background border border-border rounded-2xl p-5">
+            <h3 className="text-sm font-bold text-foreground mb-3">{item.title}</h3>
+            <ul className="space-y-2 text-xs text-muted-foreground">
+              {item.points.map((point) => (
+                <li key={point} className="flex items-start gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary translate-y-1" />
+                  <span>{point}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
 
       {/* Integration modes */}
       <h2 className="text-2xl font-bold text-foreground mb-6 mt-12">Integration modes after setup</h2>
