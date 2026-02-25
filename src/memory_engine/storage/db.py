@@ -12,6 +12,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    Index,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -22,6 +23,10 @@ class Base(DeclarativeBase):
 
 class MemoryRow(Base):
     __tablename__ = "memories"
+    __table_args__ = (
+        Index("ix_memories_account_intent", "account_key", "intent"),
+        Index("ix_memories_account_created", "account_key", "created_at"),
+    )
 
     account_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     memory_id: Mapped[str] = mapped_column(String(64), primary_key=True)
