@@ -7,6 +7,19 @@ You integrate once, then use the same simple loop everywhere: `ingest -> retriev
 
 Project status: `Alpha` (`0.1.x`)
 
+## Readme language selector
+
+Pick your preferred language. Each link points to a translated README that mirrors the core setup, integration, and operational guidance in the chosen language.
+
+- 🇬🇧 [English (this page)](README.md)
+- 🇨🇳 [简体中文](README.zh.md)
+- 🇪🇸 [Español](README.es.md)
+- 🇩🇪 [Deutsch](README.de.md)
+- 🇯🇵 [日本語](README.ja.md)
+- 🇧🇷 [Português (Brasil)](README.pt-BR.md)
+
+Translations are community maintained; if you improve a translation, please send a pull request so everyone benefits.
+
 ## What Orbit Is
 
 Orbit is a memory layer for AI products where context quality matters over time.
