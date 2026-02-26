@@ -1,18 +1,41 @@
 import Link from "next/link"
 import { cookies, headers } from "next/headers"
 import { CodeBlock } from "@/components/orbit/code-block"
-import { LanguageSelector } from "@/components/language-selector"
 import { getDocsTranslation } from "@/locales/docs"
 
-function detectLocale() {
-  const localeFromCookie = cookies().get("NEXT_LOCALE")?.value
-  const localeFromHeader = headers().get("x-next-locale")
+async function detectLocale(searchParams: Record<string, string | string[] | undefined>) {
+  const queryLang = searchParams.lang
+  if (typeof queryLang === "string" && queryLang.trim()) {
+    return queryLang.trim()
+  }
+  if (Array.isArray(queryLang) && queryLang.length > 0 && queryLang[0].trim()) {
+    return queryLang[0].trim()
+  }
+  const cookieStore = await cookies()
+  const headerStore = await headers()
+  const localeFromCookie =
+    cookieStore.get("ORBIT_SITE_LANG")?.value ??
+    cookieStore.get("NEXT_LOCALE")?.value
+  const localeFromHeader = headerStore.get("x-next-locale")
   return localeFromCookie ?? localeFromHeader ?? "en"
 }
 
-export default function DocsOverview() {
-  const locale = detectLocale()
+export default async function DocsOverview({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
+  const resolvedSearchParams = await searchParams
+  const locale = await detectLocale(resolvedSearchParams)
   const translation = getDocsTranslation(locale)
+  const withLang = (href: string) => {
+    if (locale === "en" || !href.startsWith("/docs")) {
+      return href
+    }
+    const nextUrl = new URL(href, "https://orbit.local")
+    nextUrl.searchParams.set("lang", locale)
+    return `${nextUrl.pathname}${nextUrl.search}`
+  }
 
   return (
     <div>
@@ -33,7 +56,6 @@ export default function DocsOverview() {
               {translation.headerDescription}
             </p>
           </div>
-          <LanguageSelector currentLocale={locale} label={translation.languageSelectorLabel} />
         </div>
       </div>
 
@@ -72,7 +94,7 @@ export default function DocsOverview() {
             <p className="text-sm text-muted-foreground leading-relaxed mb-6">{section.description}</p>
             <div className="space-y-2">
               {section.links.map((link) => (
-                <Link key={link.href} href={link.href} className="flex items-center gap-2 text-sm text-foreground hover:text-primary transition-colors group">
+                <Link key={link.href} href={withLang(link.href)} className="flex items-center gap-2 text-sm text-foreground hover:text-primary transition-colors group">
                   <span className="text-muted-foreground group-hover:text-primary transition-colors">{">"}</span>
                   {link.label}
                 </Link>

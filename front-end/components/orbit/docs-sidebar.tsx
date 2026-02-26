@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { usePathname } from "next/navigation"
+import { usePathname, useSearchParams } from "next/navigation"
 import { useState } from "react"
 
 const sections = [
@@ -51,7 +51,18 @@ const sections = [
 
 export function DocsSidebar() {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const lang = searchParams?.get("lang")?.trim()
+
+  const withLang = (href: string) => {
+    if (!lang || !href.startsWith("/docs")) {
+      return href
+    }
+    const nextUrl = new URL(href, "https://orbit.local")
+    nextUrl.searchParams.set("lang", lang)
+    return `${nextUrl.pathname}${nextUrl.search}`
+  }
 
   return (
     <>
@@ -85,7 +96,7 @@ export function DocsSidebar() {
                   return (
                     <li key={item.href}>
                       <Link
-                        href={item.href}
+                        href={withLang(item.href)}
                         onClick={() => setMobileOpen(false)}
                         className={`block px-3 py-2 text-sm transition-colors ${
                           isActive

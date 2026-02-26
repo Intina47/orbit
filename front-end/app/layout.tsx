@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next'
 import { Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { headers } from 'next/headers'
+import { SiteLanguageController } from "@/components/orbit/site-language-controller"
 import './globals.css'
 
 const geistMono = Geist_Mono({ subsets: ["latin"] })
@@ -33,16 +34,20 @@ export const viewport: Viewport = {
   themeColor: '#000000',
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
-  const locale = headers().get("x-next-locale") ?? "en"
+  const headerStore = await headers()
+  const locale = headerStore.get("x-next-locale") ?? "en"
   return (
     <html lang={locale}>
       <body className={`${geistMono.className} antialiased`}>
-        {children}
+        <div data-site-root>
+          {children}
+        </div>
+        <SiteLanguageController />
         <Analytics />
       </body>
     </html>
