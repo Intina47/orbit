@@ -1,61 +1,19 @@
 import Link from "next/link"
+import { cookies, headers } from "next/headers"
 import { CodeBlock } from "@/components/orbit/code-block"
+import { LanguageSelector } from "@/components/language-selector"
+import { getDocsTranslation } from "@/locales/docs"
 
-const sections = [
-  {
-    title: "Getting Started",
-    description: "Pick Cloud vs Self-Hosted setup, install Orbit, and run your first end-to-end memory loop in minutes.",
-    links: [
-      { label: "Quickstart", href: "/docs/quickstart" },
-      { label: "Installation & Setup Routes", href: "/docs/installation" },
-    ],
-  },
-  {
-    title: "Core Concepts",
-    description: "Understand the contract: event ingestion, retrieval quality, feedback signals, and inferred memory.",
-    links: [
-      { label: "Integration Guide", href: "/docs/integration-guide" },
-      { label: "Event Taxonomy", href: "/docs/event-taxonomy" },
-      { label: "Personalization", href: "/docs/personalization" },
-    ],
-  },
-  {
-    title: "API Reference",
-    description: "Method-by-method SDK docs and endpoint-by-endpoint REST reference.",
-    links: [
-      { label: "API Reference", href: "/docs/api-reference" },
-      { label: "SDK Methods", href: "/docs/sdk-methods" },
-      { label: "REST Endpoints", href: "/docs/rest-endpoints" },
-    ],
-  },
-  {
-    title: "Guides",
-    description: "Production-style examples for FastAPI, OpenClaw integration, and live chatbot testing.",
-    links: [
-      { label: "FastAPI Integration", href: "/docs/fastapi-integration" },
-      { label: "OpenClaw Plugin", href: "/docs/openclaw-plugin" },
-      { label: "Examples", href: "/docs/examples" },
-    ],
-  },
-  {
-    title: "Operations",
-    description: "Deploy, configure, monitor, and troubleshoot Orbit with a Postgres-first runtime path.",
-    links: [
-      { label: "Cloud Dashboard", href: "/dashboard" },
-      { label: "Deployment", href: "/docs/deployment" },
-      { label: "Configuration", href: "/docs/configuration" },
-      { label: "Monitoring", href: "/docs/monitoring" },
-      { label: "Troubleshooting", href: "/docs/troubleshooting" },
-    ],
-  },
-  {
-    title: "Metadata & Keywords",
-    description: "See the stack, keywords, and docs signals we highlight for SEO/clarity.",
-    links: [{ label: "Metadata Blueprint", href: "/docs/metadata" }],
-  },
-]
+function detectLocale() {
+  const localeFromCookie = cookies().get("NEXT_LOCALE")?.value
+  const localeFromHeader = headers().get("x-next-locale")
+  return localeFromCookie ?? localeFromHeader ?? "en"
+}
 
 export default function DocsOverview() {
+  const locale = detectLocale()
+  const translation = getDocsTranslation(locale)
+
   return (
     <div>
       {/* Header */}
@@ -66,70 +24,56 @@ export default function DocsOverview() {
             Documentation
           </span>
         </div>
-        <h1 className="text-4xl md:text-5xl font-bold text-foreground tracking-tight mb-6">
-          Orbit Developer Docs
-        </h1>
-        <p className="text-muted-foreground text-base md:text-lg leading-relaxed max-w-xl">
-          Orbit is memory infrastructure for developer-facing AI products. Send signals, retrieve focused context, close the loop with feedback, and let memory quality improve over time.
-        </p>
+        <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h1 className="text-4xl md:text-5xl font-bold text-foreground tracking-tight mb-3">
+              {translation.headerTitle}
+            </h1>
+            <p className="text-muted-foreground text-base md:text-lg leading-relaxed max-w-xl">
+              {translation.headerDescription}
+            </p>
+          </div>
+          <LanguageSelector currentLocale={locale} label={translation.languageSelectorLabel} />
+        </div>
       </div>
 
       {/* Quick install */}
       <div className="border border-border mb-16">
         <div className="bg-secondary px-4 py-2 border-b border-border">
-          <span className="text-xs text-muted-foreground">terminal</span>
+          <span className="text-xs text-muted-foreground">{translation.quickInstallTitle}</span>
         </div>
         <div className="p-4">
-          <code className="text-primary text-sm">pip install orbit-memory</code>
+          <code className="text-primary text-sm">{translation.quickInstallCommand}</code>
         </div>
       </div>
 
       <div className="border border-primary/30 bg-primary/5 p-6 mb-12 rounded-3xl shadow-[0_0_60px_rgba(255,255,255,0.08)]">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground">Orbit Setup Lab</p>
-            <p className="text-sm text-foreground font-semibold">Floating AI-assisted onboarding</p>
+            <p className="text-xs uppercase tracking-[0.4em] text-muted-foreground">{translation.labTitle}</p>
+            <p className="text-sm text-foreground font-semibold">{translation.labSubtitle}</p>
           </div>
-          <span className="px-3 py-1 rounded-full bg-primary/10 text-primary text-xs">Marvelous tone</span>
+          <span className="px-3 py-1 rounded-full bg-primary/10 text-primary text-xs">{translation.labBadge}</span>
         </div>
-        <p className="text-xs text-muted-foreground mb-4">
-          Tap the <span className="text-primary font-semibold">Setup with AI</span> helper that trails this page. Tell it your runtime (Cloud, Self-hosted, hybrid), your adapter, and we will build the exact prompt to copy into ChatGPT, Claude, or Cursor.
-        </p>
-        <CodeBlock
-          code={`Prompt blueprint:
-"Generate an Orbit MemoryEngine init snippet in Python using the Ollama adapter. Show ingest + retrieve call for entity_id 'alice' with conflict-aware metadata."
-`}
-          language="text"
-          filename="prompt.txt"
-        />
-        <p className="text-xs text-muted-foreground mt-4">
-          This keeps the docs humane and playful; the AI takes care of the boilerplate while you focus on the behavior you want.
-        </p>
+        <p className="text-xs text-muted-foreground mb-4">{translation.labDescription}</p>
+        <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground mb-2">{translation.promptLabel}</p>
+        <CodeBlock code={`Prompt blueprint:\n${translation.promptExample}\n`} language="text" filename="prompt.txt" />
+        <p className="text-xs text-muted-foreground mt-4">{translation.promptFooter}</p>
       </div>
 
       {/* Section grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-border">
-        {sections.map((section) => (
+        {translation.sections.map((section) => (
           <div key={section.title} className="bg-background p-8">
             <div className="flex items-center gap-2 mb-3">
               <div className="w-4 h-px bg-primary" />
-              <h2 className="text-xs tracking-[0.3em] uppercase text-muted-foreground font-bold">
-                {section.title}
-              </h2>
+              <h2 className="text-xs tracking-[0.3em] uppercase text-muted-foreground font-bold">{section.title}</h2>
             </div>
-            <p className="text-sm text-muted-foreground leading-relaxed mb-6">
-              {section.description}
-            </p>
+            <p className="text-sm text-muted-foreground leading-relaxed mb-6">{section.description}</p>
             <div className="space-y-2">
               {section.links.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className="flex items-center gap-2 text-sm text-foreground hover:text-primary transition-colors group"
-                >
-                  <span className="text-muted-foreground group-hover:text-primary transition-colors">
-                    {">"}
-                  </span>
+                <Link key={link.href} href={link.href} className="flex items-center gap-2 text-sm text-foreground hover:text-primary transition-colors group">
+                  <span className="text-muted-foreground group-hover:text-primary transition-colors">{">"}</span>
                   {link.label}
                 </Link>
               ))}

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next'
 import { Geist_Mono } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
+import { headers } from 'next/headers'
 import './globals.css'
 
 const geistMono = Geist_Mono({ subsets: ["latin"] })
@@ -37,8 +38,9 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  const locale = headers().get("x-next-locale") ?? "en"
   return (
-    <html lang="en">
+    <html lang={locale}>
       <body className={`${geistMono.className} antialiased`}>
         {children}
         <Analytics />
