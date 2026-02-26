@@ -42,6 +42,7 @@ from orbit.models import (
     IngestBatchResponse,
     IngestRequest,
     IngestResponse,
+    MemoryQualityResponse,
     PaginatedMemoriesResponse,
     PilotProRequestResponse,
     RetrieveRequest,
@@ -490,6 +491,16 @@ def create_app(
         auth: Annotated[AuthContext, Depends(require_read_scope)],
     ) -> StatusResponse:
         return service.status(auth.subject)
+
+    @app.get(
+        "/v1/dashboard/memory-quality",
+        response_model=MemoryQualityResponse,
+    )
+    def dashboard_memory_quality_endpoint(
+        service: Annotated[OrbitApiService, Depends(get_service)],
+        auth: Annotated[AuthContext, Depends(require_keys_read_scope)],
+    ) -> MemoryQualityResponse:
+        return service.memory_quality(auth.subject)
 
     @app.get("/v1/health")
     def health_endpoint(

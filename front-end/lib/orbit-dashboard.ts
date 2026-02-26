@@ -116,6 +116,12 @@ export type OrbitStatusResponse = {
   metadata_summary: OrbitMetadataSummary
 }
 
+export type OrbitMemoryQualityResponse = {
+  generated_at: string
+  window_7d: OrbitMetadataSummary
+  window_30d: OrbitMetadataSummary
+}
+
 export type OrbitPilotProRequestResponse = {
   request: OrbitPilotProRequest
   created: boolean
@@ -212,6 +218,10 @@ export class OrbitDashboardClient {
 
   async getStatus(): Promise<OrbitStatusResponse> {
     return this.request<OrbitStatusResponse>(`${this.proxyPrefix}/status`)
+  }
+
+  async getMemoryQuality(): Promise<OrbitMemoryQualityResponse> {
+    return this.request<OrbitMemoryQualityResponse>(`${this.proxyPrefix}/memory-quality`)
   }
 
   async requestPilotPro(): Promise<OrbitPilotProRequestResponse> {

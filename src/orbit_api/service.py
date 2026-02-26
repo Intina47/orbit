@@ -50,6 +50,7 @@ from orbit.models import (
     IngestRequest,
     IngestResponse,
     Memory,
+    MemoryQualityResponse,
     MetadataSummary,
     PaginatedMemoriesResponse,
     PilotProRequest,
@@ -1059,13 +1060,42 @@ class OrbitApiService:
             pilot_pro_requested_at=pilot_pro_requested_at,
         )
 
+    def memory_quality(self, account_key: str) -> MemoryQualityResponse:
+        normalized_account_key = self._normalize_account_key(account_key)
+        now = datetime.now(UTC)
+        records = self._engine.storage.list_recent_memories(
+            account_key=normalized_account_key,
+        )
+        records_7d = [
+            record
+            for record in records
+            if (now - record.created_at).total_seconds() <= (7 * 86400)
+        ]
+        records_30d = [
+            record
+            for record in records
+            if (now - record.created_at).total_seconds() <= (30 * 86400)
+        ]
+        return MemoryQualityResponse(
+            generated_at=now,
+            window_7d=self._metadata_summary_from_records(records_7d, now=now),
+            window_30d=self._metadata_summary_from_records(records_30d, now=now),
+        )
+
     def _metadata_summary(self, account_key: str) -> MetadataSummary:
         limit = max(1, self._config.metadata_summary_window)
         records = self._engine.storage.list_recent_memories(
             limit=limit,
             account_key=account_key,
         )
-        now = datetime.now(UTC)
+        return self._metadata_summary_from_records(records, now=datetime.now(UTC))
+
+    def _metadata_summary_from_records(
+        self,
+        records: list[MemoryRecord],
+        *,
+        now: datetime,
+    ) -> MetadataSummary:
         total = 0
         contested = 0
         conflict_guards = 0

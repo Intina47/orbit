@@ -197,6 +197,26 @@ def test_service_tenant_metrics_are_account_scoped(tmp_path: Path) -> None:
         service.close()
 
 
+def test_service_memory_quality_exposes_7d_and_30d_windows(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        service.ingest_with_quota(
+            account_key="acct_quality",
+            request=IngestRequest(
+                content="I am allergic to pineapple.",
+                event_type="user_question",
+                entity_id="alice",
+            ),
+            idempotency_key=None,
+        )
+        quality = service.memory_quality("acct_quality")
+        assert quality.window_7d.total_inferred_facts >= 1
+        assert quality.window_30d.total_inferred_facts >= quality.window_7d.total_inferred_facts
+        assert quality.window_30d.fact_family_coverage >= 1
+    finally:
+        service.close()
+
+
 def test_diversity_rerank_prefers_short_non_assistant(tmp_path: Path) -> None:
     service = _service(tmp_path)
     try:

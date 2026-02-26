@@ -38,6 +38,7 @@ import {
   OrbitApiKeySummary,
   OrbitDashboardApiError,
   OrbitDashboardClient,
+  OrbitMemoryQualityResponse,
   OrbitDashboardSessionResponse,
   OrbitMetadataSummary,
   OrbitStatusResponse,
@@ -65,11 +66,14 @@ export function DashboardConsole() {
   const [accountStatus, setAccountStatus] = useState<OrbitStatusResponse | null>(null)
   const [tenantMetrics, setTenantMetrics] = useState<OrbitTenantMetricsResponse | null>(null)
   const [metadataSummary, setMetadataSummary] = useState<OrbitMetadataSummary | null>(null)
+  const [memoryQuality, setMemoryQuality] = useState<OrbitMemoryQualityResponse | null>(null)
   const [metricsText, setMetricsText] = useState("")
   const [loadingMetrics, setLoadingMetrics] = useState(false)
   const [metricsError, setMetricsError] = useState<string | null>(null)
   const [loadingStatus, setLoadingStatus] = useState(false)
   const [statusError, setStatusError] = useState<string | null>(null)
+  const [loadingMemoryQuality, setLoadingMemoryQuality] = useState(false)
+  const [memoryQualityError, setMemoryQualityError] = useState<string | null>(null)
   const [loadingTenantMetrics, setLoadingTenantMetrics] = useState(false)
   const [tenantMetricsError, setTenantMetricsError] = useState<string | null>(null)
   const [loadingKeys, setLoadingKeys] = useState(false)
@@ -145,6 +149,9 @@ export function DashboardConsole() {
       setMetadataSummary(null)
       setLoadingStatus(false)
       setStatusError(null)
+      setMemoryQuality(null)
+      setLoadingMemoryQuality(false)
+      setMemoryQualityError(null)
       return
     }
 
@@ -179,6 +186,49 @@ export function DashboardConsole() {
       }
     }
     void loadStatus()
+    return () => {
+      isCancelled = true
+    }
+  }, [authState, client, reloadTick])
+
+  useEffect(() => {
+    if (authState !== "signed_in") {
+      setMemoryQuality(null)
+      setLoadingMemoryQuality(false)
+      setMemoryQualityError(null)
+      return
+    }
+
+    let isCancelled = false
+    const loadMemoryQuality = async () => {
+      setLoadingMemoryQuality(true)
+      setMemoryQualityError(null)
+      try {
+        const response = await client.getMemoryQuality()
+        if (isCancelled) {
+          return
+        }
+        setMemoryQuality(response)
+      } catch (error) {
+        if (isCancelled) {
+          return
+        }
+        if (isUnauthorized(error)) {
+          setAuthState("signed_out")
+          setAuthError("Dashboard session expired. Sign in again.")
+          setMemoryQuality(null)
+          setMemoryQualityError(null)
+          return
+        }
+        setMemoryQuality(null)
+        setMemoryQualityError(readErrorMessage(error))
+      } finally {
+        if (!isCancelled) {
+          setLoadingMemoryQuality(false)
+        }
+      }
+    }
+    void loadMemoryQuality()
     return () => {
       isCancelled = true
     }
@@ -410,6 +460,8 @@ export function DashboardConsole() {
       setRequestError(null)
       setAccountStatus(null)
       setStatusError(null)
+      setMemoryQuality(null)
+      setMemoryQualityError(null)
       setTenantMetrics(null)
       setTenantMetricsError(null)
       setMetricsText("")
@@ -820,6 +872,16 @@ export function DashboardConsole() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {loadingMemoryQuality && (
+              <div className="border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
+                Loading memory-quality trends...
+              </div>
+            )}
+            {memoryQualityError && (
+              <div className="border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+                {memoryQualityError}
+              </div>
+            )}
             {metadataAlerts.map((alert) => (
               <div
                 key={alert.id}
@@ -919,6 +981,36 @@ export function DashboardConsole() {
                         {family}: {formatCount(count)}
                       </span>
                     ))}
+                </div>
+              </div>
+            )}
+            {memoryQuality && (
+              <div className="border border-border bg-secondary/20 p-3">
+                <div className="text-[11px] uppercase tracking-[0.3em] text-muted-foreground">
+                  Trend (7d vs 30d)
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-3 text-xs text-muted-foreground md:grid-cols-4">
+                  <TrendTile
+                    label="Inferred facts"
+                    shortValue={memoryQuality.window_7d.total_inferred_facts}
+                    longValue={memoryQuality.window_30d.total_inferred_facts}
+                  />
+                  <TrendTile
+                    label="Contested ratio"
+                    shortValue={memoryQuality.window_7d.contested_ratio}
+                    longValue={memoryQuality.window_30d.contested_ratio}
+                    formatter={formatPercent}
+                  />
+                  <TrendTile
+                    label="Conflicts"
+                    shortValue={memoryQuality.window_7d.fact_conflict_count}
+                    longValue={memoryQuality.window_30d.fact_conflict_count}
+                  />
+                  <TrendTile
+                    label="Superseded refs"
+                    shortValue={memoryQuality.window_7d.superseded_fact_references}
+                    longValue={memoryQuality.window_30d.superseded_fact_references}
+                  />
                 </div>
               </div>
             )}
@@ -1337,6 +1429,35 @@ function MetricTile(props: { label: string; value: string }) {
     <div className="border border-border bg-secondary/20 p-3">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-1 text-base font-medium text-foreground">{value}</div>
+    </div>
+  )
+}
+
+function TrendTile(props: {
+  label: string
+  shortValue: number
+  longValue: number
+  formatter?: (value: number) => string
+}) {
+  const formatter = props.formatter ?? formatCount
+  const delta = props.shortValue - props.longValue
+  const deltaLabel = (() => {
+    if (delta === 0) {
+      return "0"
+    }
+    if (props.formatter === formatPercent) {
+      const magnitude = `${Math.abs(Math.round(delta * 100))}%`
+      return `${delta > 0 ? "+" : "-"}${magnitude}`
+    }
+    return `${delta > 0 ? "+" : "-"}${Math.abs(Math.round(delta)).toLocaleString()}`
+  })()
+  return (
+    <div className="border border-border bg-background p-3">
+      <div className="text-[11px] uppercase tracking-[0.3em] text-muted-foreground">{props.label}</div>
+      <div className="mt-1 text-sm font-semibold text-foreground">
+        7d {formatter(props.shortValue)} | 30d {formatter(props.longValue)}
+      </div>
+      <div className="mt-1 text-[11px] text-muted-foreground">delta: {deltaLabel}</div>
     </div>
   )
 }

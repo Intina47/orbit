@@ -137,6 +137,12 @@ class MetadataSummary(OrbitModel):
     mutable_numeric_facts: int = 0
 
 
+class MemoryQualityResponse(OrbitModel):
+    generated_at: datetime
+    window_7d: MetadataSummary
+    window_30d: MetadataSummary
+
+
 class PilotProRequest(OrbitModel):
     requested: bool
     status: str
