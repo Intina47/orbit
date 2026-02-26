@@ -141,6 +141,8 @@ class MemoryQualityResponse(OrbitModel):
     generated_at: datetime
     window_7d: MetadataSummary
     window_30d: MetadataSummary
+    daily_bins_30d: list[str] = Field(default_factory=list)
+    series_30d: dict[str, list[float]] = Field(default_factory=dict)
 
 
 class PilotProRequest(OrbitModel):

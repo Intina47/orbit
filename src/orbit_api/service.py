@@ -10,7 +10,7 @@ import secrets
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import RLock
 from time import perf_counter
@@ -1076,11 +1076,54 @@ class OrbitApiService:
             for record in records
             if (now - record.created_at).total_seconds() <= (30 * 86400)
         ]
+        daily_bins_30d, series_30d = self._memory_quality_series_30d(records, now=now)
         return MemoryQualityResponse(
             generated_at=now,
             window_7d=self._metadata_summary_from_records(records_7d, now=now),
             window_30d=self._metadata_summary_from_records(records_30d, now=now),
+            daily_bins_30d=daily_bins_30d,
+            series_30d=series_30d,
         )
+
+    def _memory_quality_series_30d(
+        self,
+        records: list[MemoryRecord],
+        *,
+        now: datetime,
+    ) -> tuple[list[str], dict[str, list[float]]]:
+        bins: list[datetime] = []
+        start_day = now.date() - timedelta(days=29)
+        for offset in range(30):
+            day = datetime.combine(
+                start_day + timedelta(days=offset),
+                datetime.min.time(),
+                tzinfo=UTC,
+            )
+            bins.append(day)
+        labels = [day.date().isoformat() for day in bins]
+
+        summary_rolling: list[MetadataSummary] = []
+        for day in bins:
+            window_records = [
+                record
+                for record in records
+                if record.created_at.date() <= day.date()
+                and (day.date() - record.created_at.date()).days <= 30
+            ]
+            summary_rolling.append(
+                self._metadata_summary_from_records(window_records, now=day)
+            )
+
+        return labels, {
+            "inferred_facts": [
+                float(item.total_inferred_facts) for item in summary_rolling
+            ],
+            "contested_ratio": [float(item.contested_ratio) for item in summary_rolling],
+            "fact_conflicts": [float(item.fact_conflict_count) for item in summary_rolling],
+            "superseded_refs": [
+                float(item.superseded_fact_references) for item in summary_rolling
+            ],
+        }
 
     def _metadata_summary(self, account_key: str) -> MetadataSummary:
         limit = max(1, self._config.metadata_summary_window)

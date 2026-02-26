@@ -994,22 +994,26 @@ export function DashboardConsole() {
                     label="Inferred facts"
                     shortValue={memoryQuality.window_7d.total_inferred_facts}
                     longValue={memoryQuality.window_30d.total_inferred_facts}
+                    series={memoryQuality.series_30d.inferred_facts}
                   />
                   <TrendTile
                     label="Contested ratio"
                     shortValue={memoryQuality.window_7d.contested_ratio}
                     longValue={memoryQuality.window_30d.contested_ratio}
                     formatter={formatPercent}
+                    series={memoryQuality.series_30d.contested_ratio}
                   />
                   <TrendTile
                     label="Conflicts"
                     shortValue={memoryQuality.window_7d.fact_conflict_count}
                     longValue={memoryQuality.window_30d.fact_conflict_count}
+                    series={memoryQuality.series_30d.fact_conflicts}
                   />
                   <TrendTile
                     label="Superseded refs"
                     shortValue={memoryQuality.window_7d.superseded_fact_references}
                     longValue={memoryQuality.window_30d.superseded_fact_references}
+                    series={memoryQuality.series_30d.superseded_refs}
                   />
                 </div>
               </div>
@@ -1438,6 +1442,7 @@ function TrendTile(props: {
   shortValue: number
   longValue: number
   formatter?: (value: number) => string
+  series?: number[]
 }) {
   const formatter = props.formatter ?? formatCount
   const delta = props.shortValue - props.longValue
@@ -1454,12 +1459,55 @@ function TrendTile(props: {
   return (
     <div className="border border-border bg-background p-3">
       <div className="text-[11px] uppercase tracking-[0.3em] text-muted-foreground">{props.label}</div>
+      {props.series && props.series.length > 1 && (
+        <div className="mt-2">
+          <Sparkline values={props.series} />
+        </div>
+      )}
       <div className="mt-1 text-sm font-semibold text-foreground">
         7d {formatter(props.shortValue)} | 30d {formatter(props.longValue)}
       </div>
       <div className="mt-1 text-[11px] text-muted-foreground">delta: {deltaLabel}</div>
     </div>
   )
+}
+
+function Sparkline(props: { values: number[] }) {
+  const width = 120
+  const height = 36
+  const points = buildSparklinePoints(props.values, width, height)
+  return (
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      className="h-9 w-full"
+      role="img"
+      aria-label="30-day trend sparkline"
+    >
+      <polyline
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        points={points}
+        className="text-primary"
+      />
+    </svg>
+  )
+}
+
+function buildSparklinePoints(values: number[], width: number, height: number): string {
+  if (values.length <= 1) {
+    return `0,${height / 2} ${width},${height / 2}`
+  }
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const span = Math.max(max - min, 1e-9)
+  return values
+    .map((value, index) => {
+      const x = (index / (values.length - 1)) * width
+      const y = height - (((value - min) / span) * (height - 4) + 2)
+      return `${x.toFixed(2)},${y.toFixed(2)}`
+    })
+    .join(" ")
 }
 
 function parsePrometheusMetrics(metricsText: string): PrometheusSnapshot {

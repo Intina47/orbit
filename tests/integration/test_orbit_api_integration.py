@@ -339,6 +339,8 @@ def test_tenant_metrics_endpoint_is_account_scoped(tmp_path: Path) -> None:
             quality_a_json = memory_quality_a.json()
             assert quality_a_json["window_7d"]["total_inferred_facts"] >= 0
             assert quality_a_json["window_30d"]["total_inferred_facts"] >= 0
+            assert len(quality_a_json["daily_bins_30d"]) == 30
+            assert len(quality_a_json["series_30d"]["inferred_facts"]) == 30
 
             memory_quality_b = await client.get(
                 "/v1/dashboard/memory-quality",
@@ -348,6 +350,8 @@ def test_tenant_metrics_endpoint_is_account_scoped(tmp_path: Path) -> None:
             quality_b_json = memory_quality_b.json()
             assert quality_b_json["window_7d"]["total_inferred_facts"] >= 0
             assert quality_b_json["window_30d"]["total_inferred_facts"] >= 0
+            assert len(quality_b_json["daily_bins_30d"]) == 30
+            assert len(quality_b_json["series_30d"]["contested_ratio"]) == 30
 
     asyncio.run(_run())
 

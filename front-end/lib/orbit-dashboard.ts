@@ -120,6 +120,8 @@ export type OrbitMemoryQualityResponse = {
   generated_at: string
   window_7d: OrbitMetadataSummary
   window_30d: OrbitMetadataSummary
+  daily_bins_30d: string[]
+  series_30d: Record<string, number[]>
 }
 
 export type OrbitPilotProRequestResponse = {

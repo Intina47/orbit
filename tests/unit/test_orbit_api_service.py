@@ -213,6 +213,11 @@ def test_service_memory_quality_exposes_7d_and_30d_windows(tmp_path: Path) -> No
         assert quality.window_7d.total_inferred_facts >= 1
         assert quality.window_30d.total_inferred_facts >= quality.window_7d.total_inferred_facts
         assert quality.window_30d.fact_family_coverage >= 1
+        assert len(quality.daily_bins_30d) == 30
+        assert len(quality.series_30d.get("inferred_facts", [])) == 30
+        assert len(quality.series_30d.get("contested_ratio", [])) == 30
+        assert len(quality.series_30d.get("fact_conflicts", [])) == 30
+        assert len(quality.series_30d.get("superseded_refs", [])) == 30
     finally:
         service.close()
 
