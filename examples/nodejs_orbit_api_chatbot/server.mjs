@@ -1,10 +1,20 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Ollama } from "ollama";
 
 import dotenv from "dotenv";
 import express from "express";
 
+// Load environment variables first so the Ollama client can pick up keys from .env
 dotenv.config();
+
+// Support either OLLAMA_API_KEY (docs) or OLLAMA_QWEN_API_KEY (legacy/example)
+const ollamaApiKey = (process.env.OLLAMA_API_KEY ?? process.env.OLLAMA_QWEN_API_KEY ?? "").trim();
+
+const ollama = new Ollama({
+  host: process.env.OLLAMA_HOST || "https://ollama.com",
+  headers: ollamaApiKey ? { Authorization: "Bearer " + ollamaApiKey } : undefined,
+});
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -16,7 +26,7 @@ const orbitApiBaseUrl = normalizeBaseUrl(
 );
 const orbitApiKey = (process.env.ORBIT_API_KEY ?? "").trim();
 const retrieveLimit = Math.max(1, Math.min(toPositiveInt(process.env.ORBIT_RETRIEVE_LIMIT, 5), 10));
-const ollamaHost = normalizeBaseUrl(process.env.OLLAMA_HOST, "http://localhost:11434");
+// const ollamaHost = normalizeBaseUrl(process.env.OLLAMA_HOST, "http://localhost:11434");
 const ollamaModel = (process.env.OLLAMA_MODEL ?? "llama3.1").trim() || "llama3.1";
 
 if (!orbitApiKey) {
@@ -122,6 +132,139 @@ app.post("/api/chat", async (request, response) => {
   }
 });
 
+// Streaming chat endpoint using Server-Sent Events (SSE).
+// Clients can connect to this endpoint to receive incremental assistant output.
+app.post("/api/chat/stream", async (request, response) => {
+  const userId = normalizeNonEmpty(request.body?.userId, "demo-user");
+  const message = normalizeNonEmpty(request.body?.message);
+  if (!message) {
+    response.status(400).json({ detail: "message is required" });
+    return;
+  }
+
+  // Record the user message first (similar to non-streaming endpoint)
+  try {
+    await orbitRequest("/v1/ingest", {
+      method: "POST",
+      body: {
+        content: message,
+        event_type: "user_question",
+        entity_id: userId,
+      },
+    });
+  } catch (err) {
+    // Non-fatal for streaming; log and continue
+    console.warn("Failed to ingest user question:", toErrorMessage(err));
+  }
+
+  // Retrieve context
+  let context = [];
+  try {
+    const retrieval = await orbitRequest("/v1/retrieve", {
+      method: "GET",
+      query: {
+        query: `What should I know about ${userId} to help with: ${message}`,
+        entity_id: userId,
+        limit: String(retrieveLimit),
+      },
+    });
+    context = Array.isArray(retrieval.memories) ? retrieval.memories : [];
+  } catch (err) {
+    console.warn("Retrieve failed before streaming chat:", toErrorMessage(err));
+    // continue with empty context
+  }
+
+  const systemPrompt = buildSystemPrompt({ userId, context, userMessage: message });
+
+  // Setup SSE headers
+  response.setHeader("Content-Type", "text/event-stream");
+  response.setHeader("Cache-Control", "no-cache");
+  response.setHeader("Connection", "keep-alive");
+  // flush headers
+  response.flushHeaders && response.flushHeaders();
+
+  let assistantText = "";
+  let generationMode = "ollama";
+  let aborted = false;
+
+  // handle client disconnect
+  request.on("close", () => {
+    aborted = true;
+  });
+
+  try {
+    const reqObj = {
+      model: ollamaModel,
+      stream: true,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: message },
+      ],
+    };
+
+    const payload = await ollama.chat(reqObj);
+
+    if (payload && typeof payload[Symbol.asyncIterator] === "function") {
+      for await (const part of payload) {
+        if (aborted) break;
+        // Preserve whitespace from the LLM streaming chunks. Trimming each
+        // chunk causes words to run together when concatenated.
+        const delta = part?.message?.content ?? "";
+        if (delta) {
+          assistantText += delta;
+          // send the incremental chunk as a JSON payload in an SSE 'data' event
+          response.write(`data: ${JSON.stringify({ delta })}\n\n`);
+        }
+      }
+    } else {
+      const content = payload?.message?.content ?? "";
+      if (content) {
+        assistantText = content;
+        response.write(`data: ${JSON.stringify({ delta: content })}\n\n`);
+      }
+    }
+  } catch (error) {
+    generationMode = "fallback";
+    const fallback = buildFallbackReply(message);
+    assistantText = fallback;
+    // send an error event with fallback so client can display something
+    response.write(`event: error\ndata: ${JSON.stringify({ error: toErrorMessage(error), fallback })}\n\n`);
+  }
+
+  // If client disconnected, we may skip ingestion but try best-effort.
+  if (!aborted) {
+    try {
+      const assistantIngest = await orbitRequest("/v1/ingest", {
+        method: "POST",
+        body: {
+          content: assistantText.trim(),
+          event_type: "assistant_response",
+          entity_id: userId,
+          metadata: {
+            source: "nodejs_orbit_api_chatbot",
+            generation_mode: generationMode,
+            model: ollamaModel,
+            context_memory_ids: context.map((memory) => memory.memory_id).filter(Boolean),
+          },
+        },
+      });
+
+      // final event with metadata
+      response.write(`event: done\ndata: ${JSON.stringify({ assistant_memory_id: assistantIngest.memory_id })}\n\n`);
+    } catch (err) {
+      console.warn("Failed to ingest assistant response after streaming:", toErrorMessage(err));
+      response.write(`event: done\ndata: ${JSON.stringify({ assistant_memory_id: null })}\n\n`);
+    }
+  }
+
+  // close the stream
+  try {
+    response.end();
+  } catch (e) {
+    // ignore
+  }
+});
+
 app.post("/api/feedback", async (request, response) => {
   try {
     const memoryId = normalizeNonEmpty(request.body?.memoryId);
@@ -155,31 +298,44 @@ app.post("/api/feedback", async (request, response) => {
 app.listen(port, () => {
   console.log(`Node.js Orbit API chatbot running: http://localhost:${port}`);
   console.log(`Orbit API: ${orbitApiBaseUrl}`);
-  console.log(`Ollama host: ${ollamaHost}`);
+  console.log(`Ollama API: ${process.env.OLLAMA_HOST}`);
 });
 
 async function generateAssistantReply({ userMessage, systemPrompt }) {
   try {
-    const payload = await jsonRequest(`${ollamaHost}/api/chat`, {
-      method: "POST",
-      body: {
-        model: ollamaModel,
-        stream: false,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userMessage },
-        ],
-      },
-      headers: {},
-      timeoutMs: 20_000,
-    });
-    const content = normalizeNonEmpty(payload?.message?.content);
-    if (content) {
-      return {
-        text: content,
-        mode: "ollama",
-        model: ollamaModel,
-      };
+    // Request a (possibly) streaming response from Ollama. The client may
+    // return either a final response object or an async iterable when
+    // `stream: true` is used. Handle both cases so the example works with
+    // local Ollama and Ollama Cloud SDK variations.
+    const req = {
+      model: ollamaModel,
+      stream: true,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage },
+      ],
+    };
+
+    const payload = await ollama.chat(req);
+
+    // If the result is an async iterable (streaming), collect parts.
+    if (payload && typeof payload[Symbol.asyncIterator] === "function") {
+      let collected = "";
+      for await (const part of payload) {
+        // Preserve whitespace when assembling streamed parts so words don't
+        // merge together. We'll trim before storing if needed.
+        const partText = part?.message?.content ?? "";
+        if (partText) collected += partText;
+      }
+      if (collected) {
+        return { text: collected, mode: "ollama", model: ollamaModel };
+      }
+    } else {
+      // Non-streaming response object
+      const content = payload?.message?.content ?? "";
+      if (content) {
+        return { text: content, mode: "ollama", model: ollamaModel };
+      }
     }
   } catch (error) {
     console.warn("Ollama unavailable, falling back to deterministic response:", toErrorMessage(error));

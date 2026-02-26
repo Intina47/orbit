@@ -13,6 +13,10 @@ class EngineConfig(CoreEngineConfig):
     compression_max_items_in_summary: int = 20
     metrics_path: str = "metrics.json"
     metrics_flush_interval: int = 50
+    flash_pipeline_mode: str = "sync"
+    flash_pipeline_workers: int = 1
+    flash_pipeline_queue_size: int = 256
+    flash_pipeline_maintenance_interval: int = 50
 
     @classmethod
     def from_env(cls) -> EngineConfig:
@@ -50,4 +54,12 @@ class EngineConfig(CoreEngineConfig):
             ),
             metrics_path=os.getenv("MDE_METRICS_PATH", "metrics.json"),
             metrics_flush_interval=int(os.getenv("MDE_METRICS_FLUSH_INTERVAL", "50")),
+            flash_pipeline_mode=os.getenv("MDE_FLASH_PIPELINE_MODE", "sync"),
+            flash_pipeline_workers=int(os.getenv("MDE_FLASH_PIPELINE_WORKERS", "1")),
+            flash_pipeline_queue_size=int(
+                os.getenv("MDE_FLASH_PIPELINE_QUEUE_SIZE", "256")
+            ),
+            flash_pipeline_maintenance_interval=int(
+                os.getenv("MDE_FLASH_PIPELINE_MAINTENANCE_INTERVAL", "50")
+            ),
         )

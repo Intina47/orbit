@@ -117,6 +117,12 @@ class AdaptivePersonalizationEngine:
         r"(?:is|are)\s+(?:a\s+)?(?:big\s+)?fan\s+of\s+(?P<item>[^.,;!?]+)",
         flags=re.IGNORECASE,
     )
+    _FAVORITE_IS_PATTERN = re.compile(
+        r"\bmy\s+(?:favorite|favourite)\s+"
+        r"(?:car|fruit|food|artist|song|music|programming\s+language)\s+"
+        r"(?:is|are)\s+(?P<item>[^.,;!?]+)",
+        flags=re.IGNORECASE,
+    )
     _WEIGHT_CURRENT_PATTERN = re.compile(
         r"\b(?:i(?:'m)?|im|currently|current(?:ly)?\s+at)\s+"
         r"(?:am\s+|at\s+|weigh(?:ing)?\s+)?"
@@ -153,6 +159,50 @@ class AdaptivePersonalizationEngine:
         "still",
         "today",
         "yet",
+    }
+    _PREFERENCE_LEADING_FILLERS = {
+        "a",
+        "an",
+        "the",
+        "it",
+        "me",
+        "my",
+        "really",
+        "so",
+        "very",
+        "some",
+    }
+    _PREFERENCE_DISALLOWED_TOKENS = {
+        "someone",
+        "somebody",
+        "anyone",
+        "anybody",
+    }
+    _PREFERENCE_PREFIX_PHRASES = (
+        "none other than ",
+        "nothing other than ",
+        "a good ",
+    )
+    _ENTITY_TOKEN_TYPO_MAP = {
+        "banna": "banana",
+        "bananna": "banana",
+        "watemelon": "watermelon",
+        "watermellon": "watermelon",
+        "pinaple": "pineapple",
+        "porshe": "porsche",
+        "cayen": "cayenne",
+        "larmar": "lamar",
+        "qith": "with",
+    }
+    _PREFERENCE_CANONICAL_ALIASES = {
+        "tayler swift": "taylor swift",
+        "tswift": "taylor swift",
+        "t swift": "taylor swift",
+        "porshe cayen": "porsche cayenne",
+        "porsche cayen": "porsche cayenne",
+        "porshe cayenne": "porsche cayenne",
+        "water melon": "watermelon",
+        "pinaple": "pineapple",
     }
     _FAILURE_TERMS = {
         "bug",
@@ -1149,6 +1199,7 @@ class AdaptivePersonalizationEngine:
             item = cls._normalize_fact_value(match.group("item"))
             if item is None:
                 continue
+            item = cls._normalize_entity_value(item)
             polarity = "negative" if match.group("neg") else "positive"
             key = f"allergy:{item}"
             signature = (subject, key, polarity)
@@ -1169,10 +1220,10 @@ class AdaptivePersonalizationEngine:
         for pattern in (cls._LIKES_PATTERN, cls._FAN_OF_PATTERN):
             for match in pattern.finditer(normalized):
                 subject = cls._normalize_subject(match.group("subject"))
-                item = cls._normalize_fact_value(match.group("item"))
+                item = cls._normalize_preference_value(match.group("item"))
                 if item is None:
                     continue
-                key = f"preference_like:{item}"
+                key = f"preference_like:{cls._fact_key_value(item)}"
                 signature = (subject, key, "positive")
                 if signature in seen:
                     continue
@@ -1187,6 +1238,25 @@ class AdaptivePersonalizationEngine:
                         critical=False,
                     )
                 )
+        for match in cls._FAVORITE_IS_PATTERN.finditer(normalized):
+            item = cls._normalize_preference_value(match.group("item"))
+            if item is None:
+                continue
+            key = f"preference_like:{cls._fact_key_value(item)}"
+            signature = ("user", key, "positive")
+            if signature in seen:
+                continue
+            seen.add(signature)
+            extracted.append(
+                _FactSignal(
+                    subject="user",
+                    fact_key=key,
+                    fact_type="preference",
+                    polarity="positive",
+                    value=item,
+                    critical=False,
+                )
+            )
 
         for match in cls._WEIGHT_CURRENT_PATTERN.finditer(normalized):
             weight_raw = match.group("weight")
@@ -1384,6 +1454,54 @@ class AdaptivePersonalizationEngine:
         if len(value) < 2:
             return None
         return value
+
+    @classmethod
+    def _normalize_preference_value(cls, raw: str) -> str | None:
+        lowered = " ".join(raw.lower().split())
+        lowered = re.sub(r"[\"'`]", "", lowered)
+        lowered = re.sub(r"[^a-z0-9\s-]", "", lowered)
+        lowered = re.sub(
+            r"\b(?:and|but)\s+"
+            r"(?:i|it|this|that|we|you|he|she|they|should|must|need|cannot|"
+            r"cant|have|has|had|will|would|could|can)\b.*$",
+            "",
+            lowered,
+        ).strip()
+        lowered = re.sub(r"\b(?:because|since)\b.*$", "", lowered).strip()
+        for prefix in cls._PREFERENCE_PREFIX_PHRASES:
+            if lowered.startswith(prefix):
+                lowered = lowered.removeprefix(prefix).strip()
+        tokens = [token for token in lowered.split() if token]
+        while tokens and tokens[0] in cls._PREFERENCE_LEADING_FILLERS:
+            tokens.pop(0)
+        if len(tokens) >= 2 and tokens[0] == "it" and tokens[1] == "when":
+            return None
+        if "when" in tokens and any(
+            token in cls._PREFERENCE_DISALLOWED_TOKENS for token in tokens
+        ):
+            return None
+        if not tokens:
+            return None
+        corrected_tokens = [
+            cls._ENTITY_TOKEN_TYPO_MAP.get(token, token) for token in tokens
+        ]
+        canonical = " ".join(corrected_tokens[:4]).strip()
+        canonical = cls._PREFERENCE_CANONICAL_ALIASES.get(canonical, canonical)
+        if len(canonical) < 2:
+            return None
+        return canonical
+
+    @staticmethod
+    def _fact_key_value(value: str) -> str:
+        normalized = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+        return normalized or "unknown"
+
+    @classmethod
+    def _normalize_entity_value(cls, value: str) -> str:
+        tokens = [token for token in value.split() if token]
+        corrected = [cls._ENTITY_TOKEN_TYPO_MAP.get(token, token) for token in tokens]
+        output = " ".join(corrected[:4]).strip()
+        return output or value
 
     def _subject_label(self, *, entity_id: str, subject: str) -> str:
         if subject == "user":

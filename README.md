@@ -282,6 +282,7 @@ make run-api
 - Deployment (GCP Cloud Run): `docs/DEPLOY_GCP_CLOUD_RUN.md`
 - GCP env matrix: `docs/GCP_ENV_MATRIX.md`
 - Cloud dashboard/API-key plan: `docs/ORBIT_CLOUD_DASHBOARD_PLAN.md`
+- Engine internal manual: `docs/ENGINE_MANUAL.md`
 - Build and implementation log: `BUILD_AND_SPEC.md`
 - Repo metadata for discovery: `metaData.md`
 

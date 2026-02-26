@@ -844,6 +844,87 @@ def test_service_boosts_conflict_guard_for_fact_queries(tmp_path: Path) -> None:
         service.close()
 
 
+def test_service_demotes_contested_fact_vs_active_superseding(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        contested = _retrieved(
+            "fact_contested",
+            intent="inferred_user_fact",
+            content="Inferred user fact: alice is allergic to pineapple.",
+            score=0.88,
+            relationships=[
+                "inference_type:fact_extraction_v1",
+                "fact_key:allergy:pineapple",
+                "fact_subject:user",
+                "fact_status:contested",
+                "clarification_required:true",
+                "conflicts_with:old_fact",
+            ],
+        )
+        active_superseding = _retrieved(
+            "fact_active",
+            intent="inferred_user_fact",
+            content="Inferred user fact: alice reports no current allergy to pineapple.",
+            score=0.74,
+            relationships=[
+                "inference_type:fact_extraction_v1",
+                "fact_key:allergy:pineapple",
+                "fact_subject:user",
+                "fact_status:superseding",
+                "clarification_required:false",
+                "supersedes:old_fact",
+            ],
+        )
+        assistant = _retrieved(
+            "assistant",
+            intent="assistant_response",
+            content="General assistant answer.",
+            score=0.9,
+        )
+        reweighted = service._reweight_ranked_by_query(
+            query="What allergy should I use now for Alice?",
+            ranked=[assistant, contested, active_superseding],
+            candidates=[assistant.memory, contested.memory, active_superseding.memory],
+        )
+        assert reweighted[0].memory.memory_id == "fact_active"
+        assert reweighted[-1].memory.memory_id == "assistant"
+    finally:
+        service.close()
+
+
+def test_service_user_context_query_filters_assistant_results(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        selected = service._select_with_intent_caps(
+            ranked=[
+                _retrieved(
+                    "assistant",
+                    intent="assistant_response",
+                    content="Long prior assistant response",
+                    score=0.99,
+                ),
+                _retrieved(
+                    "fact",
+                    intent="inferred_user_fact",
+                    content="Inferred user fact: alice likes taylor swift.",
+                    score=0.82,
+                ),
+                _retrieved(
+                    "profile",
+                    intent="user_profile",
+                    content="Alice prefers concise examples.",
+                    score=0.8,
+                ),
+            ],
+            top_k=2,
+            query="What should I know about me before you answer this?",
+        )
+        selected_ids = [item.memory.memory_id for item in selected]
+        assert "assistant" not in selected_ids
+    finally:
+        service.close()
+
+
 def test_service_prefers_failure_pattern_over_generic_topic_cluster(tmp_path: Path) -> None:
     service = _service(tmp_path)
     try:

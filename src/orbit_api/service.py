@@ -825,6 +825,7 @@ class OrbitApiService:
         candidates = self._ensure_non_assistant_candidates(
             candidates=candidates,
             top_k=request.limit,
+            query=request.query,
             pool_size=pool_size,
             entity_id=request.entity_id,
             event_type=request.event_type,
@@ -1670,6 +1671,9 @@ class OrbitApiService:
         progress_focused = query_focus == "progress"
         fact_focused = query_focus == "fact"
         recency_focused = self._is_recency_or_progress_query(normalized_query)
+        user_context_focused = self._is_user_context_query(normalized_query)
+        assistant_history_query = self._is_assistant_history_query(normalized_query)
+        fact_conflict_query = self._is_fact_conflict_query(normalized_query)
         latest_progress = self._latest_progress_candidate(candidates)
         has_advancement_signal = (
             latest_progress is not None
@@ -1683,6 +1687,7 @@ class OrbitApiService:
             intent = memory.intent.strip().lower()
             inference_type = self._memory_inference_type(memory)
             text = self._memory_text(memory)
+            relationships = [str(item).strip() for item in memory.relationships]
             multiplier = 1.0
 
             if style_focused:
@@ -1738,6 +1743,41 @@ class OrbitApiService:
                     multiplier *= 0.84
                 elif intent.startswith("assistant_"):
                     multiplier *= 0.6
+
+            if intent == "inferred_user_fact":
+                fact_status = self._relationship_value(relationships, "fact_status:")
+                clarification_required = (
+                    self._relationship_value(relationships, "clarification_required:")
+                    == "true"
+                )
+                superseded_count = len(
+                    self._relationship_values(relationships, "supersedes:")
+                )
+                conflicts_count = len(
+                    self._relationship_values(relationships, "conflicts_with:")
+                )
+                if fact_status == "superseding":
+                    multiplier *= 1.45
+                elif fact_status == "active":
+                    multiplier *= 1.2
+                elif fact_status == "contested":
+                    multiplier *= 0.92 if fact_conflict_query else 0.52
+                if superseded_count > 0:
+                    multiplier *= 1.15
+                if conflicts_count > 0 and not fact_conflict_query:
+                    multiplier *= 0.82
+                if clarification_required and not fact_conflict_query:
+                    multiplier *= 0.72
+            elif intent == "inferred_user_fact_conflict" and not (
+                fact_focused or fact_conflict_query
+            ):
+                multiplier *= 0.86
+
+            if intent.startswith("assistant_"):
+                if user_context_focused and not assistant_history_query:
+                    multiplier *= 0.22
+                elif fact_focused:
+                    multiplier *= 0.7
 
             if (
                 has_advancement_signal
@@ -2037,10 +2077,15 @@ class OrbitApiService:
             getattr(self._engine.config, "assistant_response_max_share", 0.25)
         )
         max_share = min(max(max_share, 0.0), 1.0)
-        assistant_cap = self._assistant_cap(top_k, max_share=max_share)
+        normalized_query = query.strip().lower()
+        assistant_cap = self._effective_assistant_cap(
+            top_k=top_k,
+            query=normalized_query,
+            configured_max_share=max_share,
+        )
         bucket_caps = self._intent_bucket_caps(
             top_k=top_k,
-            query=query.strip().lower(),
+            query=normalized_query,
             assistant_cap=assistant_cap,
         )
         selected: list[Any] = []
@@ -2060,7 +2105,15 @@ class OrbitApiService:
         for item in deferred:
             if len(selected) >= top_k:
                 break
+            bucket = self._intent_bucket(item.memory.intent)
+            cap = bucket_caps.get(bucket, top_k)
+            if cap <= 0:
+                continue
+            current_count = bucket_counts.get(bucket, 0)
+            if current_count >= cap:
+                continue
             selected.append(item)
+            bucket_counts[bucket] = current_count + 1
         return self._ensure_inferred_probe_coverage(
             query=query,
             ranked=ranked,
@@ -2076,6 +2129,14 @@ class OrbitApiService:
         assistant_cap: int,
     ) -> dict[str, int]:
         query_focus = self._query_focus(query)
+        assistant_history_query = self._is_assistant_history_query(query)
+        if self._is_user_context_query(query) and not assistant_history_query:
+            assistant_cap = 0
+        elif (
+            query_focus in {"style", "mistake", "progress", "fact"}
+            and not assistant_history_query
+        ):
+            assistant_cap = min(assistant_cap, 1)
         profile_cap = min(top_k, max(2, int(top_k * 0.6)))
         pattern_cap = 1
         progress_cap = top_k
@@ -2108,6 +2169,21 @@ class OrbitApiService:
             "progress": min(progress_cap, top_k),
             "attempt": min(attempt_cap, top_k),
         }
+
+    @classmethod
+    def _effective_assistant_cap(
+        cls,
+        *,
+        top_k: int,
+        query: str,
+        configured_max_share: float,
+    ) -> int:
+        cap = cls._assistant_cap(top_k, max_share=configured_max_share)
+        if cls._is_user_context_query(query) and not cls._is_assistant_history_query(
+            query
+        ):
+            return 0
+        return cap
 
     def _ensure_inferred_probe_coverage(
         self,
@@ -2279,6 +2355,75 @@ class OrbitApiService:
         return bool(terms.intersection(fact_terms))
 
     @staticmethod
+    def _is_user_context_query(query: str) -> bool:
+        normalized = query.strip().lower()
+        if not normalized:
+            return False
+        phrase_triggers = (
+            "about me",
+            "know about me",
+            "what do you know about",
+            "what should i know about",
+            "tell me everything you know",
+            "my profile",
+            "my preferences",
+            "my allergies",
+        )
+        if any(phrase in normalized for phrase in phrase_triggers):
+            return True
+        terms = _tokenize_query(normalized)
+        if {"about", "me"}.issubset(terms):
+            return True
+        if "remember" in terms and "me" in terms:
+            return True
+        return False
+
+    @staticmethod
+    def _is_assistant_history_query(query: str) -> bool:
+        normalized = query.strip().lower()
+        if not normalized:
+            return False
+        phrase_triggers = (
+            "what did you say",
+            "your last response",
+            "assistant response",
+            "last reply",
+            "repeat your response",
+            "what was your answer",
+        )
+        if any(phrase in normalized for phrase in phrase_triggers):
+            return True
+        terms = _tokenize_query(normalized)
+        history_terms = {
+            "assistant",
+            "response",
+            "reply",
+            "replied",
+            "answer",
+            "said",
+        }
+        return bool(terms.intersection(history_terms))
+
+    @staticmethod
+    def _is_fact_conflict_query(query: str) -> bool:
+        terms = _tokenize_query(query)
+        if not terms:
+            return False
+        triggers = {
+            "conflict",
+            "conflicting",
+            "contradiction",
+            "clarify",
+            "clarification",
+            "confirm",
+            "confirmed",
+            "still",
+            "anymore",
+            "safe",
+        }
+        return bool(terms.intersection(triggers))
+
+    @staticmethod
     def _fact_query_alignment_multiplier(
         *,
         memory: MemoryRecord,
@@ -2301,6 +2446,7 @@ class OrbitApiService:
         candidates: list[MemoryRecord],
         *,
         top_k: int,
+        query: str,
         pool_size: int,
         entity_id: str | None,
         event_type: str | None,
@@ -2314,7 +2460,12 @@ class OrbitApiService:
             getattr(self._engine.config, "assistant_response_max_share", 0.25)
         )
         max_share = min(max(max_share, 0.0), 1.0)
-        required_non_assistant = max(top_k - self._assistant_cap(top_k, max_share), 0)
+        assistant_cap = self._effective_assistant_cap(
+            top_k=top_k,
+            query=query.strip().lower(),
+            configured_max_share=max_share,
+        )
+        required_non_assistant = max(top_k - assistant_cap, 0)
         current_non_assistant = sum(
             1 for item in candidates if not self._is_assistant_intent(item.intent)
         )

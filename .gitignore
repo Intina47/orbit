@@ -22,3 +22,4 @@ tmp/
 eval_reports/
 quality_reports/
 soak_reports/
+examples/nodejs_orbit_api_chatbot/node_modules/*

@@ -241,6 +241,31 @@ def test_fact_inference_is_subject_aware(engine) -> None:
     assert len(conflicts) == 0
 
 
+def test_fact_inference_normalizes_preference_entities(engine) -> None:
+    _store_event(
+        engine,
+        Event(
+            timestamp=1_700_391_000,
+            entity_id="alice",
+            event_type="user_question",
+            description=(
+                "I love me some taylor swift and I love it when someone knows me well. "
+                "My favourite car is none other than porshe cayen."
+            ),
+            metadata={"intent": "user_question"},
+        ),
+    )
+
+    facts = [
+        item for item in engine.get_memory(entity_id="alice") if item.intent == "inferred_user_fact"
+    ]
+    fact_keys = {_relation_value(item, "fact_key:") for item in facts}
+    summaries = {item.summary.lower() for item in facts}
+    assert "preference_like:taylor_swift" in fact_keys
+    assert "preference_like:porsche_cayenne" in fact_keys
+    assert not any("someone knows" in summary for summary in summaries)
+
+
 def test_contradicting_allergy_creates_conflict_guard(engine) -> None:
     _store_event(
         engine,
