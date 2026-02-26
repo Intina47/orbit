@@ -130,6 +130,11 @@ class MetadataSummary(OrbitModel):
     contested_ratio: float
     conflict_guard_ratio: float
     average_fact_age_days: float
+    fact_family_coverage: int = 0
+    fact_family_counts: dict[str, int] = Field(default_factory=dict)
+    fact_conflict_count: int = 0
+    superseded_fact_references: int = 0
+    mutable_numeric_facts: int = 0
 
 
 class PilotProRequest(OrbitModel):

@@ -262,6 +262,11 @@ def test_status_metadata_summary_reflects_user_fact_conflicts(tmp_path: Path) ->
             assert summary["contested_facts"] >= 1
             assert summary["conflict_guards"] >= 1
             assert summary["contested_ratio"] > 0.0
+            assert "fact_family_coverage" in summary
+            assert "fact_family_counts" in summary
+            assert "fact_conflict_count" in summary
+            assert "superseded_fact_references" in summary
+            assert "mutable_numeric_facts" in summary
 
     asyncio.run(_run())
 
@@ -424,6 +429,14 @@ def test_api_retrieves_atomic_facts_from_long_ingest_without_storage_blowup(
                 for item in allergy_retrieve.json()["memories"]
             )
             assert "allergic to pineapple" in allergy_text
+
+            status = await client.get("/v1/status", headers=headers)
+            assert status.status_code == 200
+            metadata_summary = status.json()["metadata_summary"]
+            assert metadata_summary["fact_family_coverage"] >= 3
+            assert metadata_summary["fact_family_counts"].get("allergy", 0) >= 1
+            assert metadata_summary["fact_family_counts"].get("weight_current", 0) >= 1
+            assert metadata_summary["fact_family_counts"].get("weight_target", 0) >= 1
 
     asyncio.run(_run())
 

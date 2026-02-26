@@ -562,3 +562,41 @@ def test_fact_extraction_uses_raw_ingest_text_before_truncation(tmp_path: Path) 
         )
     finally:
         local_engine.close()
+
+
+def test_weight_current_fact_supersedes_previous_value(engine) -> None:
+    _store_event(
+        engine,
+        Event(
+            timestamp=1_700_900_000,
+            entity_id="alice",
+            event_type="user_question",
+            description="I am currently at 58 kg.",
+            metadata={"intent": "user_question"},
+        ),
+    )
+    _store_event(
+        engine,
+        Event(
+            timestamp=1_700_900_100,
+            entity_id="alice",
+            event_type="user_question",
+            description="Update: I am currently at 61 kg now.",
+            metadata={"intent": "user_question"},
+        ),
+    )
+
+    inferred_facts = [
+        item for item in engine.get_memory(entity_id="alice") if item.intent == "inferred_user_fact"
+    ]
+    current_weights = [
+        item
+        for item in inferred_facts
+        if (_relation_value(item, "fact_key:") or "").startswith("weight_current:")
+    ]
+    assert len(current_weights) == 1
+    assert _relation_value(current_weights[0], "fact_key:") == "weight_current:61"
+    assert _relation_value(current_weights[0], "fact_status:") == "superseding"
+    assert any(
+        relation.startswith("supersedes:") for relation in current_weights[0].relationships
+    )

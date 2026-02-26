@@ -578,9 +578,19 @@ class AdaptivePersonalizationEngine:
                 if self._fact_polarity(item) not in {None, signal.polarity}
             ]
             conflict_ids = [item.memory_id for item in conflicting]
+            mutable_supersedes = self._mutable_numeric_supersedes(
+                entity_id=entity_id,
+                subject=signal.subject,
+                fact_key=signal.fact_key,
+                account_key=account_key,
+            )
 
             confirmed_change = bool(conflicting) and self._has_confirmation_signal(text)
-            supersedes = tuple(conflict_ids) if confirmed_change else ()
+            supersedes_ids: list[str] = []
+            if confirmed_change:
+                supersedes_ids.extend(conflict_ids)
+            supersedes_ids.extend(mutable_supersedes)
+            supersedes = tuple(dict.fromkeys(memory_id for memory_id in supersedes_ids if memory_id))
             clarification_required = bool(
                 conflicting and signal.critical and not confirmed_change
             )
@@ -654,6 +664,48 @@ class AdaptivePersonalizationEngine:
                     output.append(guard)
 
         return output
+
+    def _mutable_numeric_supersedes(
+        self,
+        *,
+        entity_id: str,
+        subject: str,
+        fact_key: str,
+        account_key: str | None = None,
+    ) -> list[str]:
+        family = self._fact_family(fact_key)
+        if family not in {"weight_current", "weight_target"}:
+            return []
+        matches: list[str] = []
+        prefix = f"{family}:"
+        for memory in self._storage.list_memories(account_key=account_key):
+            if entity_id not in memory.entities:
+                continue
+            if memory.intent.strip().lower() != "inferred_user_fact":
+                continue
+            memory_subject = self._relationship_value(
+                memory.relationships,
+                prefix="fact_subject:",
+            )
+            if memory_subject != subject:
+                continue
+            memory_key = self._relationship_value(
+                memory.relationships,
+                prefix="fact_key:",
+            )
+            if memory_key is None or not memory_key.startswith(prefix):
+                continue
+            if memory_key == fact_key:
+                continue
+            matches.append(memory.memory_id)
+        return matches
+
+    @staticmethod
+    def _fact_family(fact_key: str) -> str:
+        normalized = fact_key.strip().lower()
+        if ":" not in normalized:
+            return normalized
+        return normalized.split(":", 1)[0]
 
     def _build_fact_conflict_guard(
         self,

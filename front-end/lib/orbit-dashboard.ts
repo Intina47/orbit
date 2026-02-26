@@ -71,6 +71,11 @@ export type OrbitMetadataSummary = {
   contested_ratio: number
   conflict_guard_ratio: number
   average_fact_age_days: number
+  fact_family_coverage: number
+  fact_family_counts: Record<string, number>
+  fact_conflict_count: number
+  superseded_fact_references: number
+  mutable_numeric_facts: number
 }
 
 export type OrbitTenantUsageMetric = {

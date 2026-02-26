@@ -878,7 +878,50 @@ export function DashboardConsole() {
                   {metadataSummary.average_fact_age_days.toFixed(1)} days
                 </div>
               </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.3em]">Fact families</div>
+                <div className="text-lg font-semibold text-foreground">
+                  {formatCount(metadataSummary.fact_family_coverage)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.3em]">Fact conflicts</div>
+                <div className="text-lg font-semibold text-foreground">
+                  {formatCount(metadataSummary.fact_conflict_count)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.3em]">Superseded refs</div>
+                <div className="text-lg font-semibold text-foreground">
+                  {formatCount(metadataSummary.superseded_fact_references)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.3em]">Mutable numeric</div>
+                <div className="text-lg font-semibold text-foreground">
+                  {formatCount(metadataSummary.mutable_numeric_facts)}
+                </div>
+              </div>
             </div>
+            {Object.keys(metadataSummary.fact_family_counts ?? {}).length > 0 && (
+              <div className="border border-border bg-secondary/20 p-3">
+                <div className="text-[11px] uppercase tracking-[0.3em] text-muted-foreground">
+                  Fact family coverage
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                  {Object.entries(metadataSummary.fact_family_counts)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([family, count]) => (
+                      <span
+                        key={family}
+                        className="border border-border bg-background px-2 py-1 text-foreground"
+                      >
+                        {family}: {formatCount(count)}
+                      </span>
+                    ))}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

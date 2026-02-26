@@ -1070,6 +1070,10 @@ class OrbitApiService:
         contested = 0
         conflict_guards = 0
         confirmed = 0
+        fact_conflict_count = 0
+        superseded_fact_references = 0
+        mutable_numeric_facts = 0
+        fact_family_counts: Counter[str] = Counter()
         total_age_days = 0.0
         for record in records:
             relationships = [str(item).strip() for item in record.relationships]
@@ -1089,13 +1093,28 @@ class OrbitApiService:
             if intent == "inferred_user_fact_conflict":
                 conflict_guards += 1
                 contested += 1
+                fact_conflict_count += 1
+                fact_key = self._relationship_value(relationships, prefix="fact_key:")
+                if fact_key:
+                    family = self._fact_family(fact_key)
+                    fact_family_counts[family] += 1
                 continue
+            fact_key = self._relationship_value(relationships, prefix="fact_key:")
+            if fact_key:
+                family = self._fact_family(fact_key)
+                fact_family_counts[family] += 1
+                if family in {"weight_current", "weight_target"}:
+                    mutable_numeric_facts += 1
             fact_status = self._relationship_value(relationships, prefix="fact_status:") or ""
             clarification_required = (
                 self._relationship_value(relationships, prefix="clarification_required:") == "true"
             )
+            superseded_fact_references += len(
+                self._relationship_values(relationships, prefix="supersedes:")
+            )
             if fact_status == "contested" or clarification_required:
                 contested += 1
+                fact_conflict_count += 1
             else:
                 confirmed += 1
         average_age = (total_age_days / total) if total else 0.0
@@ -1109,7 +1128,19 @@ class OrbitApiService:
             contested_ratio=contested_ratio,
             conflict_guard_ratio=conflict_guard_ratio,
             average_fact_age_days=average_age,
+            fact_family_coverage=len(fact_family_counts),
+            fact_family_counts=dict(sorted(fact_family_counts.items())),
+            fact_conflict_count=fact_conflict_count,
+            superseded_fact_references=superseded_fact_references,
+            mutable_numeric_facts=mutable_numeric_facts,
         )
+
+    @staticmethod
+    def _fact_family(fact_key: str) -> str:
+        normalized = fact_key.strip().lower()
+        if ":" not in normalized:
+            return normalized
+        return normalized.split(":", 1)[0]
 
     @staticmethod
     def _usage_metric(
