@@ -134,6 +134,69 @@ def test_service_ingest_retrieve_feedback_and_status(tmp_path: Path) -> None:
         service.close()
 
 
+def test_service_tenant_metrics_are_account_scoped(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        service.ingest_with_quota(
+            request=IngestRequest(
+                content="Tenant A memory one",
+                event_type="user_question",
+                entity_id="alice",
+            ),
+            account_key="acct_a",
+            idempotency_key=None,
+        )
+        service.ingest_with_quota(
+            request=IngestRequest(
+                content="Tenant A memory two",
+                event_type="user_question",
+                entity_id="alice",
+            ),
+            account_key="acct_a",
+            idempotency_key=None,
+        )
+        service.consume_query_quota("acct_a")
+        service.retrieve(
+            RetrieveRequest(
+                query="Tenant A query",
+                entity_id="alice",
+                limit=5,
+            ),
+            account_key="acct_a",
+        )
+        service.issue_api_key(
+            account_key="acct_a",
+            name="tenant-a-key",
+            scopes=["read"],
+        )
+
+        service.ingest_with_quota(
+            request=IngestRequest(
+                content="Tenant B isolated memory",
+                event_type="user_question",
+                entity_id="bob",
+            ),
+            account_key="acct_b",
+            idempotency_key=None,
+        )
+
+        tenant_a_metrics = service.tenant_metrics("acct_a")
+        assert tenant_a_metrics.ingest.used == 2
+        assert tenant_a_metrics.retrieve.used == 1
+        assert tenant_a_metrics.api_keys.used == 1
+        assert tenant_a_metrics.plan == "free"
+        assert tenant_a_metrics.ingest.limit == 2
+        assert tenant_a_metrics.retrieve.limit == 2
+        assert tenant_a_metrics.ingest.status == "limit"
+
+        tenant_b_metrics = service.tenant_metrics("acct_b")
+        assert tenant_b_metrics.ingest.used == 1
+        assert tenant_b_metrics.retrieve.used == 0
+        assert tenant_b_metrics.api_keys.used == 0
+    finally:
+        service.close()
+
+
 def test_diversity_rerank_prefers_short_non_assistant(tmp_path: Path) -> None:
     service = _service(tmp_path)
     try:
@@ -219,6 +282,9 @@ def test_service_metrics_include_http_status_and_dashboard_failures(
         assert 'orbit_http_responses_total{status_code="401"} 2' in metrics
         assert "orbit_dashboard_auth_failures_total 1" in metrics
         assert "orbit_dashboard_key_rotation_failures_total 1" in metrics
+        assert "orbit_flash_pipeline_mode_async" in metrics
+        assert "orbit_flash_pipeline_queue_depth" in metrics
+        assert "orbit_flash_pipeline_runs_total" in metrics
     finally:
         service.close()
 

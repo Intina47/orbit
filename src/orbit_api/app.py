@@ -47,6 +47,7 @@ from orbit.models import (
     RetrieveRequest,
     RetrieveResponse,
     StatusResponse,
+    TenantMetricsResponse,
     TimeRange,
 )
 from orbit_api.auth import AuthContext, require_auth_context
@@ -501,6 +502,13 @@ def create_app(
         service: Annotated[OrbitApiService, Depends(get_service)],
     ) -> str:
         return service.metrics_text()
+
+    @app.get("/v1/tenant-metrics", response_model=TenantMetricsResponse)
+    def tenant_metrics_endpoint(
+        service: Annotated[OrbitApiService, Depends(get_service)],
+        auth: Annotated[AuthContext, Depends(require_read_scope)],
+    ) -> TenantMetricsResponse:
+        return service.tenant_metrics(auth.subject)
 
     @app.post("/v1/auth/validate", response_model=AuthValidationResponse)
     def validate_endpoint(

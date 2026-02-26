@@ -57,6 +57,8 @@ from orbit.models import (
     RetrieveRequest,
     RetrieveResponse,
     StatusResponse,
+    TenantMetricsResponse,
+    TenantUsageMetric,
 )
 from orbit_api.auth import AuthContext
 from orbit_api.config import ApiConfig
@@ -995,6 +997,68 @@ class OrbitApiService:
             metadata_summary=metadata_summary,
         )
 
+    def tenant_metrics(self, account_key: str) -> TenantMetricsResponse:
+        now = datetime.now(UTC)
+        normalized_account_key = self._normalize_account_key(account_key)
+        policy = self._plan_policy(normalized_account_key)
+        usage = self._read_usage_row(normalized_account_key)
+        events_month = (
+            usage.events_month
+            if usage
+            and usage.month_year == now.year
+            and usage.month_value == now.month
+            else 0
+        )
+        queries_month = (
+            usage.queries_month
+            if usage
+            and usage.month_year == now.year
+            and usage.month_value == now.month
+            else 0
+        )
+        active_api_keys = self._count_active_api_keys(normalized_account_key)
+        storage_mb = self._storage_usage_mb(account_key=normalized_account_key)
+        pilot_pro_request_row = self._read_pilot_pro_request(normalized_account_key)
+        pilot_pro_requested_at = (
+            pilot_pro_request_row.requested_at if pilot_pro_request_row else None
+        )
+        pilot_pro_requested = (
+            pilot_pro_request_row is not None
+            and self._normalize_pilot_pro_status(pilot_pro_request_row.status)
+            == "requested"
+        )
+        return TenantMetricsResponse(
+            generated_at=now,
+            plan=policy.plan,
+            reset_at=datetime.fromtimestamp(
+                self._next_month_reset_epoch(now),
+                tz=UTC,
+            ),
+            warning_threshold_percent=policy.warning_threshold_percent,
+            critical_threshold_percent=policy.critical_threshold_percent,
+            ingest=self._usage_metric(
+                used=events_month,
+                limit=policy.ingest_events_per_month,
+                warning_threshold_percent=policy.warning_threshold_percent,
+                critical_threshold_percent=policy.critical_threshold_percent,
+            ),
+            retrieve=self._usage_metric(
+                used=queries_month,
+                limit=policy.retrieve_queries_per_month,
+                warning_threshold_percent=policy.warning_threshold_percent,
+                critical_threshold_percent=policy.critical_threshold_percent,
+            ),
+            api_keys=self._usage_metric(
+                used=active_api_keys,
+                limit=policy.api_keys_limit,
+                warning_threshold_percent=policy.warning_threshold_percent,
+                critical_threshold_percent=policy.critical_threshold_percent,
+            ),
+            storage_usage_mb=storage_mb,
+            pilot_pro_requested=pilot_pro_requested,
+            pilot_pro_requested_at=pilot_pro_requested_at,
+        )
+
     def _metadata_summary(self, account_key: str) -> MetadataSummary:
         limit = max(1, self._config.metadata_summary_window)
         records = self._engine.storage.list_recent_memories(
@@ -1045,6 +1109,44 @@ class OrbitApiService:
             contested_ratio=contested_ratio,
             conflict_guard_ratio=conflict_guard_ratio,
             average_fact_age_days=average_age,
+        )
+
+    @staticmethod
+    def _usage_metric(
+        *,
+        used: int,
+        limit: int | None,
+        warning_threshold_percent: int,
+        critical_threshold_percent: int,
+    ) -> TenantUsageMetric:
+        if limit is None or limit <= 0:
+            return TenantUsageMetric(
+                used=max(0, int(used)),
+                limit=None,
+                remaining=None,
+                utilization_percent=0.0,
+                status="ok",
+            )
+        normalized_used = max(0, int(used))
+        normalized_limit = int(limit)
+        remaining = max(normalized_limit - normalized_used, 0)
+        utilization_percent = min(
+            100.0,
+            max(0.0, (float(normalized_used) / float(normalized_limit)) * 100.0),
+        )
+        status = "ok"
+        if normalized_used >= normalized_limit:
+            status = "limit"
+        elif utilization_percent >= float(critical_threshold_percent):
+            status = "critical"
+        elif utilization_percent >= float(warning_threshold_percent):
+            status = "warning"
+        return TenantUsageMetric(
+            used=normalized_used,
+            limit=normalized_limit,
+            remaining=remaining,
+            utilization_percent=utilization_percent,
+            status=status,
         )
 
     def request_pilot_pro(
@@ -1210,6 +1312,7 @@ class OrbitApiService:
                 "dashboard_key_rotation_failures_total"
             ]
             status_counts = dict(self._http_status_counts)
+        flash_metrics = self._engine.flash_metrics_snapshot()
         lines = [
             "# HELP orbit_ingest_requests_total Total ingest requests.",
             "# TYPE orbit_ingest_requests_total counter",
@@ -1229,6 +1332,33 @@ class OrbitApiService:
             "# HELP orbit_uptime_seconds Process uptime in seconds.",
             "# TYPE orbit_uptime_seconds gauge",
             f"orbit_uptime_seconds {self._uptime_seconds():.3f}",
+            "# HELP orbit_flash_pipeline_mode_async Flash pipeline mode (1 async, 0 sync).",
+            "# TYPE orbit_flash_pipeline_mode_async gauge",
+            f"orbit_flash_pipeline_mode_async {flash_metrics['mode_async']:.0f}",
+            "# HELP orbit_flash_pipeline_workers Number of flash pipeline workers.",
+            "# TYPE orbit_flash_pipeline_workers gauge",
+            f"orbit_flash_pipeline_workers {flash_metrics['workers']:.0f}",
+            "# HELP orbit_flash_pipeline_queue_depth Pending flash pipeline tasks.",
+            "# TYPE orbit_flash_pipeline_queue_depth gauge",
+            f"orbit_flash_pipeline_queue_depth {flash_metrics['queue_depth']:.0f}",
+            "# HELP orbit_flash_pipeline_queue_capacity Flash pipeline queue capacity.",
+            "# TYPE orbit_flash_pipeline_queue_capacity gauge",
+            f"orbit_flash_pipeline_queue_capacity {flash_metrics['queue_capacity']:.0f}",
+            "# HELP orbit_flash_pipeline_enqueued_total Total flash tasks enqueued.",
+            "# TYPE orbit_flash_pipeline_enqueued_total counter",
+            f"orbit_flash_pipeline_enqueued_total {flash_metrics['enqueued_total']:.0f}",
+            "# HELP orbit_flash_pipeline_dropped_total Total flash tasks dropped due to queue pressure.",
+            "# TYPE orbit_flash_pipeline_dropped_total counter",
+            f"orbit_flash_pipeline_dropped_total {flash_metrics['dropped_total']:.0f}",
+            "# HELP orbit_flash_pipeline_runs_total Total flash tasks executed.",
+            "# TYPE orbit_flash_pipeline_runs_total counter",
+            f"orbit_flash_pipeline_runs_total {flash_metrics['runs_total']:.0f}",
+            "# HELP orbit_flash_pipeline_maintenance_total Total flash maintenance cycles.",
+            "# TYPE orbit_flash_pipeline_maintenance_total counter",
+            f"orbit_flash_pipeline_maintenance_total {flash_metrics['maintenance_total']:.0f}",
+            "# HELP orbit_flash_pipeline_failures_total Total flash pipeline task failures.",
+            "# TYPE orbit_flash_pipeline_failures_total counter",
+            f"orbit_flash_pipeline_failures_total {flash_metrics['failures_total']:.0f}",
         ]
         lines.extend(
             [

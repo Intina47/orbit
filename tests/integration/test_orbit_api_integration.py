@@ -266,6 +266,69 @@ def test_status_metadata_summary_reflects_user_fact_conflicts(tmp_path: Path) ->
     asyncio.run(_run())
 
 
+def test_tenant_metrics_endpoint_is_account_scoped(tmp_path: Path) -> None:
+    async def _run() -> None:
+        app = _build_app(tmp_path)
+        transport = httpx.ASGITransport(app=app)
+        headers_a = {
+            "Authorization": f"Bearer {_jwt_token(subject='user-a', account_key='acct_a')}"
+        }
+        headers_b = {
+            "Authorization": f"Bearer {_jwt_token(subject='user-b', account_key='acct_b')}"
+        }
+
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            ingest_a = await client.post(
+                "/v1/ingest",
+                headers=headers_a,
+                json={
+                    "content": "Tenant A profile note",
+                    "event_type": "user_question",
+                    "entity_id": "alice",
+                },
+            )
+            assert ingest_a.status_code == 201
+
+            retrieve_a = await client.get(
+                "/v1/retrieve",
+                headers=headers_a,
+                params={
+                    "query": "what should i know about alice?",
+                    "entity_id": "alice",
+                    "limit": 5,
+                },
+            )
+            assert retrieve_a.status_code == 200
+
+            ingest_b = await client.post(
+                "/v1/ingest",
+                headers=headers_b,
+                json={
+                    "content": "Tenant B private note",
+                    "event_type": "user_question",
+                    "entity_id": "bob",
+                },
+            )
+            assert ingest_b.status_code == 201
+
+            tenant_metrics_a = await client.get("/v1/tenant-metrics", headers=headers_a)
+            assert tenant_metrics_a.status_code == 200
+            tenant_metrics_a_json = tenant_metrics_a.json()
+            assert tenant_metrics_a_json["ingest"]["used"] == 1
+            assert tenant_metrics_a_json["retrieve"]["used"] == 1
+
+            tenant_metrics_b = await client.get("/v1/tenant-metrics", headers=headers_b)
+            assert tenant_metrics_b.status_code == 200
+            tenant_metrics_b_json = tenant_metrics_b.json()
+            assert tenant_metrics_b_json["ingest"]["used"] == 1
+            assert tenant_metrics_b_json["retrieve"]["used"] == 0
+
+    asyncio.run(_run())
+
+
 def test_api_enforces_cross_tenant_memory_isolation(tmp_path: Path) -> None:
     async def _run() -> None:
         app = _build_app(tmp_path)

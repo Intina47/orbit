@@ -151,6 +151,28 @@ class StatusResponse(OrbitModel):
     metadata_summary: MetadataSummary
 
 
+class TenantUsageMetric(OrbitModel):
+    used: int
+    limit: int | None = None
+    remaining: int | None = None
+    utilization_percent: float
+    status: str
+
+
+class TenantMetricsResponse(OrbitModel):
+    generated_at: datetime
+    plan: str
+    reset_at: datetime
+    warning_threshold_percent: int
+    critical_threshold_percent: int
+    ingest: TenantUsageMetric
+    retrieve: TenantUsageMetric
+    api_keys: TenantUsageMetric
+    storage_usage_mb: float
+    pilot_pro_requested: bool
+    pilot_pro_requested_at: datetime | None = None
+
+
 class RetrieveRequest(OrbitModel):
     query: str
     limit: int = 10

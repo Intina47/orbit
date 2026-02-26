@@ -41,6 +41,7 @@ import {
   OrbitDashboardSessionResponse,
   OrbitMetadataSummary,
   OrbitStatusResponse,
+  OrbitTenantMetricsResponse,
 } from "@/lib/orbit-dashboard"
 
 const PAGE_SIZE = 10
@@ -62,12 +63,15 @@ export function DashboardConsole() {
 
   const [keys, setKeys] = useState<OrbitApiKeySummary[]>([])
   const [accountStatus, setAccountStatus] = useState<OrbitStatusResponse | null>(null)
+  const [tenantMetrics, setTenantMetrics] = useState<OrbitTenantMetricsResponse | null>(null)
   const [metadataSummary, setMetadataSummary] = useState<OrbitMetadataSummary | null>(null)
   const [metricsText, setMetricsText] = useState("")
   const [loadingMetrics, setLoadingMetrics] = useState(false)
   const [metricsError, setMetricsError] = useState<string | null>(null)
   const [loadingStatus, setLoadingStatus] = useState(false)
   const [statusError, setStatusError] = useState<string | null>(null)
+  const [loadingTenantMetrics, setLoadingTenantMetrics] = useState(false)
+  const [tenantMetricsError, setTenantMetricsError] = useState<string | null>(null)
   const [loadingKeys, setLoadingKeys] = useState(false)
   const [requestError, setRequestError] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
@@ -175,6 +179,49 @@ export function DashboardConsole() {
       }
     }
     void loadStatus()
+    return () => {
+      isCancelled = true
+    }
+  }, [authState, client, reloadTick])
+
+  useEffect(() => {
+    if (authState !== "signed_in") {
+      setTenantMetrics(null)
+      setLoadingTenantMetrics(false)
+      setTenantMetricsError(null)
+      return
+    }
+
+    let isCancelled = false
+    const loadTenantMetrics = async () => {
+      setLoadingTenantMetrics(true)
+      setTenantMetricsError(null)
+      try {
+        const response = await client.getTenantMetrics()
+        if (isCancelled) {
+          return
+        }
+        setTenantMetrics(response)
+      } catch (error) {
+        if (isCancelled) {
+          return
+        }
+        if (isUnauthorized(error)) {
+          setAuthState("signed_out")
+          setAuthError("Dashboard session expired. Sign in again.")
+          setTenantMetrics(null)
+          setTenantMetricsError(null)
+          return
+        }
+        setTenantMetrics(null)
+        setTenantMetricsError(readErrorMessage(error))
+      } finally {
+        if (!isCancelled) {
+          setLoadingTenantMetrics(false)
+        }
+      }
+    }
+    void loadTenantMetrics()
     return () => {
       isCancelled = true
     }
@@ -363,6 +410,8 @@ export function DashboardConsole() {
       setRequestError(null)
       setAccountStatus(null)
       setStatusError(null)
+      setTenantMetrics(null)
+      setTenantMetricsError(null)
       setMetricsText("")
       setMetricsError(null)
       setIsRequestingPilotPro(false)
@@ -549,7 +598,11 @@ export function DashboardConsole() {
   }
 
   const isAuthenticated = authState === "signed_in"
-  const usageSummary = accountStatus ? deriveUsageSummary(accountStatus, keys) : null
+  const usageSummary = tenantMetrics
+    ? deriveUsageSummary(tenantMetrics)
+    : accountStatus
+      ? deriveUsageSummaryFromStatus(accountStatus, keys)
+      : null
   const usageAlerts = usageSummary ? buildUsageAlerts(usageSummary) : []
   const metadataAlerts = metadataSummary ? buildMetadataAlerts(metadataSummary) : []
   const metricsSnapshot = useMemo(
@@ -678,17 +731,17 @@ export function DashboardConsole() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {loadingStatus && (
+            {(loadingStatus || loadingTenantMetrics) && (
               <div className="border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
                 Loading usage metrics...
               </div>
             )}
-            {statusError && (
+            {tenantMetricsError && (
               <div className="border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
-                {statusError}
+                {tenantMetricsError}
               </div>
             )}
-            {!loadingStatus && !statusError && usageSummary && (
+            {!loadingStatus && !loadingTenantMetrics && !tenantMetricsError && usageSummary && (
               <>
                 <div className="border border-border bg-secondary/20 p-3">
                   <div className="text-sm font-medium text-foreground">
@@ -875,6 +928,40 @@ export function DashboardConsole() {
                   <MetricTile
                     label="Key Rotation Failures"
                     value={formatCount(metricsSnapshot.dashboardKeyRotationFailuresTotal)}
+                  />
+                </div>
+                <div className="border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
+                  Flash pipeline metrics are platform health signals from the shared ingest runtime
+                  (queue depth, drops, failures). Usage and key quotas above remain tenant scoped.
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+                  <MetricTile
+                    label="Flash Mode"
+                    value={metricsSnapshot.flashPipelineModeAsync > 0 ? "Async" : "Sync"}
+                  />
+                  <MetricTile
+                    label="Flash Workers"
+                    value={formatCount(metricsSnapshot.flashPipelineWorkers)}
+                  />
+                  <MetricTile
+                    label="Flash Queue Depth"
+                    value={`${formatCount(metricsSnapshot.flashPipelineQueueDepth)} / ${formatCount(metricsSnapshot.flashPipelineQueueCapacity)}`}
+                  />
+                  <MetricTile
+                    label="Flash Runs"
+                    value={formatCount(metricsSnapshot.flashPipelineRunsTotal)}
+                  />
+                  <MetricTile
+                    label="Flash Maintenance"
+                    value={formatCount(metricsSnapshot.flashPipelineMaintenanceTotal)}
+                  />
+                  <MetricTile
+                    label="Flash Drops"
+                    value={formatCount(metricsSnapshot.flashPipelineDroppedTotal)}
+                  />
+                  <MetricTile
+                    label="Flash Failures"
+                    value={formatCount(metricsSnapshot.flashPipelineFailuresTotal)}
                   />
                 </div>
                 <details className="border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
@@ -1191,6 +1278,14 @@ type PrometheusSnapshot = {
   dashboardAuthFailuresTotal: number
   dashboardKeyRotationFailuresTotal: number
   uptimeSeconds: number
+  flashPipelineModeAsync: number
+  flashPipelineWorkers: number
+  flashPipelineQueueDepth: number
+  flashPipelineQueueCapacity: number
+  flashPipelineDroppedTotal: number
+  flashPipelineFailuresTotal: number
+  flashPipelineRunsTotal: number
+  flashPipelineMaintenanceTotal: number
 }
 
 function MetricTile(props: { label: string; value: string }) {
@@ -1217,6 +1312,38 @@ function parsePrometheusMetrics(metricsText: string): PrometheusSnapshot {
       "orbit_dashboard_key_rotation_failures_total",
     ),
     uptimeSeconds: parsePrometheusMetricValue(metricsText, "orbit_uptime_seconds"),
+    flashPipelineModeAsync: parsePrometheusMetricValue(
+      metricsText,
+      "orbit_flash_pipeline_mode_async",
+    ),
+    flashPipelineWorkers: parsePrometheusMetricValue(
+      metricsText,
+      "orbit_flash_pipeline_workers",
+    ),
+    flashPipelineQueueDepth: parsePrometheusMetricValue(
+      metricsText,
+      "orbit_flash_pipeline_queue_depth",
+    ),
+    flashPipelineQueueCapacity: parsePrometheusMetricValue(
+      metricsText,
+      "orbit_flash_pipeline_queue_capacity",
+    ),
+    flashPipelineDroppedTotal: parsePrometheusMetricValue(
+      metricsText,
+      "orbit_flash_pipeline_dropped_total",
+    ),
+    flashPipelineFailuresTotal: parsePrometheusMetricValue(
+      metricsText,
+      "orbit_flash_pipeline_failures_total",
+    ),
+    flashPipelineRunsTotal: parsePrometheusMetricValue(
+      metricsText,
+      "orbit_flash_pipeline_runs_total",
+    ),
+    flashPipelineMaintenanceTotal: parsePrometheusMetricValue(
+      metricsText,
+      "orbit_flash_pipeline_maintenance_total",
+    ),
   }
 }
 
@@ -1297,6 +1424,32 @@ type MetadataAlert = {
 }
 
 function deriveUsageSummary(
+  metrics: OrbitTenantMetricsResponse,
+): UsageSummary {
+  const planCode = normalizeOptionalString(metrics.plan)?.toLowerCase() || "free"
+  const planLabel = planCode === "pilot_pro" ? "Pilot Pro" : "Free"
+  const resetAtIso = normalizeOptionalString(metrics.reset_at)
+  const pilotProRequestedAtIso = normalizeOptionalString(metrics.pilot_pro_requested_at)
+  return {
+    planLabel,
+    planCode,
+    ingestUsed: sanitizeCount(metrics.ingest.used),
+    ingestLimit: resolveLimit(metrics.ingest.limit, 0),
+    retrieveUsed: sanitizeCount(metrics.retrieve.used),
+    retrieveLimit: resolveLimit(metrics.retrieve.limit, 0),
+    activeApiKeys: sanitizeCount(metrics.api_keys.used),
+    apiKeyLimit: resolveLimit(metrics.api_keys.limit, defaultApiKeyLimitForPlan(planCode)),
+    resetAtIso,
+    resetAtLabel: resetAtIso ? formatDate(resetAtIso) : "next month (UTC)",
+    warningThresholdPercent: sanitizePercent(metrics.warning_threshold_percent, 80),
+    criticalThresholdPercent: sanitizePercent(metrics.critical_threshold_percent, 95),
+    pilotProRequested: Boolean(metrics.pilot_pro_requested),
+    pilotProRequestStatus: metrics.pilot_pro_requested ? "requested" : "not_requested",
+    pilotProRequestedAtLabel: pilotProRequestedAtIso ? formatDate(pilotProRequestedAtIso) : null,
+  }
+}
+
+function deriveUsageSummaryFromStatus(
   status: OrbitStatusResponse,
   keys: OrbitApiKeySummary[],
 ): UsageSummary {

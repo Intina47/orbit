@@ -73,6 +73,28 @@ export type OrbitMetadataSummary = {
   average_fact_age_days: number
 }
 
+export type OrbitTenantUsageMetric = {
+  used: number
+  limit?: number | null
+  remaining?: number | null
+  utilization_percent: number
+  status: "ok" | "warning" | "critical" | "limit"
+}
+
+export type OrbitTenantMetricsResponse = {
+  generated_at: string
+  plan: string
+  reset_at: string
+  warning_threshold_percent: number
+  critical_threshold_percent: number
+  ingest: OrbitTenantUsageMetric
+  retrieve: OrbitTenantUsageMetric
+  api_keys: OrbitTenantUsageMetric
+  storage_usage_mb: number
+  pilot_pro_requested: boolean
+  pilot_pro_requested_at?: string | null
+}
+
 export type OrbitStatusResponse = {
   connected: boolean
   api_version: string
@@ -195,6 +217,10 @@ export class OrbitDashboardClient {
 
   async getMetricsText(): Promise<string> {
     return this.requestText(`${this.proxyPrefix}/metrics`)
+  }
+
+  async getTenantMetrics(): Promise<OrbitTenantMetricsResponse> {
+    return this.request<OrbitTenantMetricsResponse>(`${this.proxyPrefix}/tenant-metrics`)
   }
 
   async createApiKey(payload: OrbitApiKeyCreateRequest): Promise<OrbitApiKeyIssueResponse> {
