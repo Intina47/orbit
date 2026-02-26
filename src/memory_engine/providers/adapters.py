@@ -276,7 +276,12 @@ class OllamaSemanticProvider(
         if client_cls is None:
             msg = "ollama.Client class is unavailable."
             raise RuntimeError(msg)
-        self._client: Any = client_cls(host=host or os.getenv("MDE_OLLAMA_HOST"))
+        resolved_host = host or os.getenv("MDE_OLLAMA_HOST")
+        api_key = os.getenv("MDE_OLLAMA_API_KEY") or os.getenv("OLLAMA_API_KEY")
+        client_kwargs: dict[str, Any] = {"host": resolved_host}
+        if api_key:
+            client_kwargs["headers"] = {"Authorization": f"Bearer {api_key}"}
+        self._client: Any = client_cls(**client_kwargs)
         self._model = model or os.getenv("MDE_OLLAMA_SEMANTIC_MODEL", "llama3.1")
 
     def understand(self, event: RawEvent) -> SemanticUnderstanding:
@@ -315,7 +320,12 @@ class OllamaEmbeddingProvider(
         if client_cls is None:
             msg = "ollama.Client class is unavailable."
             raise RuntimeError(msg)
-        self._client: Any = client_cls(host=host or os.getenv("MDE_OLLAMA_HOST"))
+        resolved_host = host or os.getenv("MDE_OLLAMA_HOST")
+        api_key = os.getenv("MDE_OLLAMA_API_KEY") or os.getenv("OLLAMA_API_KEY")
+        client_kwargs: dict[str, Any] = {"host": resolved_host}
+        if api_key:
+            client_kwargs["headers"] = {"Authorization": f"Bearer {api_key}"}
+        self._client: Any = client_cls(**client_kwargs)
         self._model = model or os.getenv(
             "MDE_OLLAMA_EMBEDDING_MODEL", "nomic-embed-text"
         )

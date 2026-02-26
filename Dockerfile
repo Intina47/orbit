@@ -19,7 +19,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
       --index-url https://download.pytorch.org/whl/cpu \
       --extra-index-url https://pypi.org/simple \
-      .
+      ".[ollama]"
 
 RUN chmod +x /app/scripts/docker-entrypoint.sh
 
