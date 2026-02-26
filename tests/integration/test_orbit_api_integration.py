@@ -329,6 +329,105 @@ def test_tenant_metrics_endpoint_is_account_scoped(tmp_path: Path) -> None:
     asyncio.run(_run())
 
 
+def test_api_retrieves_atomic_facts_from_long_ingest_without_storage_blowup(
+    tmp_path: Path,
+) -> None:
+    async def _run() -> None:
+        db_path = tmp_path / "long_fact_capture.db"
+        api_config = ApiConfig(
+            database_url=f"sqlite:///{db_path}",
+            sqlite_fallback_path=str(db_path),
+            free_events_per_day=100,
+            free_queries_per_day=500,
+            free_events_per_month=100,
+            free_queries_per_month=500,
+            jwt_secret=JWT_SECRET,
+            jwt_issuer=JWT_ISSUER,
+            jwt_audience=JWT_AUDIENCE,
+            max_ingest_content_chars=4000,
+        )
+        engine_config = EngineConfig(
+            sqlite_path=str(db_path),
+            database_url=f"sqlite:///{db_path}",
+            embedding_dim=32,
+            max_content_chars=180,
+            assistant_max_content_chars=180,
+            persistent_confidence_prior=0.0,
+            ephemeral_confidence_prior=0.0,
+            ranker_min_training_samples=2,
+            ranker_training_batch_size=2,
+        )
+        app = create_app(api_config=api_config, engine_config=engine_config)
+        transport = httpx.ASGITransport(app=app)
+        headers = {"Authorization": f"Bearer {_jwt_token(account_key='acct-long')}"}
+
+        filler = " ".join(f"filler{i}" for i in range(220))
+        long_prompt = (
+            f"{filler}. "
+            "I am allergic to pineapple. "
+            "I am currently at 58 and I need to be at 64 by end of month for army medical interview."
+        )
+
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            ingest = await client.post(
+                "/v1/ingest",
+                headers=headers,
+                json={
+                    "content": long_prompt,
+                    "event_type": "user_question",
+                    "entity_id": "alice",
+                },
+            )
+            assert ingest.status_code == 201
+
+            memories = await client.get("/v1/memories", headers=headers, params={"limit": 50})
+            assert memories.status_code == 200
+            source = next(
+                item
+                for item in memories.json()["data"]
+                if item["memory_id"] == ingest.json()["memory_id"]
+            )
+            assert "truncated" in source["content"].lower()
+            assert len(source["content"]) < len(long_prompt)
+
+            retrieve = await client.get(
+                "/v1/retrieve",
+                headers=headers,
+                params={
+                    "query": "What weight am I currently at, what target do I need, and why?",
+                    "entity_id": "alice",
+                    "limit": 5,
+                },
+            )
+            assert retrieve.status_code == 200
+            returned = retrieve.json()["memories"]
+            returned_text = " ".join(item["content"].lower() for item in returned)
+            assert "58" in returned_text
+            assert "64" in returned_text
+            assert "army medical interview" in returned_text
+
+            allergy_retrieve = await client.get(
+                "/v1/retrieve",
+                headers=headers,
+                params={
+                    "query": "What allergy should I avoid?",
+                    "entity_id": "alice",
+                    "limit": 5,
+                },
+            )
+            assert allergy_retrieve.status_code == 200
+            allergy_text = " ".join(
+                item["content"].lower()
+                for item in allergy_retrieve.json()["memories"]
+            )
+            assert "allergic to pineapple" in allergy_text
+
+    asyncio.run(_run())
+
+
 def test_api_enforces_cross_tenant_memory_isolation(tmp_path: Path) -> None:
     async def _run() -> None:
         app = _build_app(tmp_path)

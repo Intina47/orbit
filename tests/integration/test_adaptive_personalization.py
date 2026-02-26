@@ -501,3 +501,64 @@ def test_inferred_memory_ttl_expires_and_is_pruned(tmp_path: Path) -> None:
         assert inferred_id not in remaining_ids
     finally:
         local_engine.close()
+
+
+def test_fact_extraction_uses_raw_ingest_text_before_truncation(tmp_path: Path) -> None:
+    config = EngineConfig(
+        sqlite_path=str(tmp_path / "raw_fact_capture.db"),
+        metrics_path=str(tmp_path / "metrics.json"),
+        embedding_dim=64,
+        max_content_chars=180,
+        assistant_max_content_chars=180,
+        persistent_confidence_prior=0.0,
+        ephemeral_confidence_prior=0.0,
+        ranker_min_training_samples=2,
+        ranker_training_batch_size=2,
+        personalization_lifecycle_check_interval_seconds=0,
+    )
+    local_engine = DecisionEngine(config=config)
+    try:
+        filler = " ".join(f"padding{i}" for i in range(180))
+        source_id = _store_event(
+            local_engine,
+            Event(
+                timestamp=1_700_800_000,
+                entity_id="alice",
+                event_type="user_question",
+                description=(
+                    f"{filler}. "
+                    "I am allergic to pineapple. "
+                    "I am currently at 58 and I need to be at 64 by the end of the month "
+                    "for army medical interview."
+                ),
+                metadata={"intent": "user_question"},
+            ),
+        )
+
+        memories = local_engine.get_memory(entity_id="alice")
+        source_memory = next(item for item in memories if item.memory_id == source_id)
+        assert "truncated" in source_memory.content.lower()
+
+        inferred_facts = [
+            item for item in memories if item.intent == "inferred_user_fact"
+        ]
+        assert any(
+            _relation_value(item, "fact_key:") == "allergy:pineapple"
+            for item in inferred_facts
+        )
+        assert any(
+            _relation_value(item, "fact_key:") == "weight_current:58"
+            for item in inferred_facts
+        )
+        assert any(
+            _relation_value(item, "fact_key:") == "weight_target:64"
+            for item in inferred_facts
+        )
+        assert any(
+            (_relation_value(item, "fact_key:") or "").startswith("weight_goal_reason:")
+            and "army medical interview"
+            in ((_relation_value(item, "fact_key:") or "").replace("_", " "))
+            for item in inferred_facts
+        )
+    finally:
+        local_engine.close()

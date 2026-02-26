@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import queue
+import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -160,6 +163,15 @@ class DecisionEngine:
         self._entity_memory_ids: dict[tuple[str, str], set[str]] = {}
         self._recent_key_timestamps: dict[tuple[str, str, str], list[datetime]] = {}
         self._warm_cache_from_storage()
+        self._flash_mode = self.config.flash_pipeline_mode.strip().lower()
+        self._flash_async_enabled = self._flash_mode == "async"
+        self._flash_queue: queue.Queue[tuple[str, tuple[object, ...]]] | None = None
+        self._flash_stop_event: threading.Event | None = None
+        self._flash_workers: list[threading.Thread] = []
+        self._flash_lock = threading.RLock()
+        self._flash_ops = 0
+        if self._flash_async_enabled:
+            self._start_flash_workers()
 
     def process_input(self, event: Event) -> ProcessedEvent:
         self._metrics["events_received"] += 1
@@ -179,7 +191,6 @@ class DecisionEngine:
         decision: StorageDecision,
         account_key: str | None = None,
     ) -> MemoryRecord | None:
-        self._run_personalization_lifecycle(account_key=account_key)
         if not decision.store:
             self._metrics["events_discarded"] += 1
             return None
@@ -193,13 +204,12 @@ class DecisionEngine:
         )
         self._register_stored_memory(stored)
         self._metrics["events_stored"] += 1
-        self._store_inferred_candidates(
-            self.personalization.observe_memory(stored, account_key=account_key),
+        self._run_flash_pipeline(
+            processed=processed,
+            stored=stored,
+            should_compress=decision.should_compress,
             account_key=account_key,
         )
-
-        if decision.should_compress:
-            self._maybe_compress_cluster(processed, account_key=account_key)
         self._schedule_metrics_flush()
         return stored
 
@@ -295,10 +305,164 @@ class DecisionEngine:
         return sorted(self._entity_memory_ids.get(scope_key, set()))
 
     def close(self) -> None:
+        self._stop_flash_workers()
         self._write_metrics()
         if self._persist_vector_index:
             self.vector_store.save()
         self.storage.close()
+
+    def flash_metrics_snapshot(self) -> dict[str, float]:
+        queue_depth = 0.0
+        queue_capacity = 0.0
+        if self._flash_queue is not None:
+            queue_depth = float(self._flash_queue.qsize())
+            queue_capacity = float(self._flash_queue.maxsize)
+        return {
+            "mode_async": 1.0 if self._flash_async_enabled else 0.0,
+            "workers": float(len(self._flash_workers)),
+            "queue_depth": queue_depth,
+            "queue_capacity": queue_capacity,
+            "enqueued_total": float(self._metrics.get("flash_pipeline_enqueued", 0.0)),
+            "dropped_total": float(self._metrics.get("flash_pipeline_dropped", 0.0)),
+            "runs_total": float(self._metrics.get("flash_pipeline_runs", 0.0)),
+            "maintenance_total": float(
+                self._metrics.get("flash_maintenance_runs", 0.0)
+            ),
+            "failures_total": float(self._metrics.get("flash_pipeline_failures", 0.0)),
+        }
+
+    def _start_flash_workers(self) -> None:
+        worker_count = max(1, int(self.config.flash_pipeline_workers))
+        queue_size = max(8, int(self.config.flash_pipeline_queue_size))
+        self._flash_queue = queue.Queue(maxsize=queue_size)
+        self._flash_stop_event = threading.Event()
+        self._flash_workers = []
+        for index in range(worker_count):
+            worker = threading.Thread(
+                target=self._flash_worker_loop,
+                name=f"orbit-flash-{index + 1}",
+                daemon=True,
+            )
+            worker.start()
+            self._flash_workers.append(worker)
+
+    def _stop_flash_workers(self) -> None:
+        if not self._flash_async_enabled:
+            return
+        stop_event = self._flash_stop_event
+        task_queue = self._flash_queue
+        if stop_event is None or task_queue is None:
+            return
+        deadline = time.monotonic() + 2.0
+        while not task_queue.empty() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        stop_event.set()
+        for _ in self._flash_workers:
+            try:
+                task_queue.put_nowait(("stop", ()))
+            except queue.Full:
+                break
+        for worker in self._flash_workers:
+            worker.join(timeout=2.0)
+        self._flash_workers = []
+        self._flash_queue = None
+        self._flash_stop_event = None
+
+    def _flash_worker_loop(self) -> None:
+        task_queue = self._flash_queue
+        stop_event = self._flash_stop_event
+        if task_queue is None or stop_event is None:
+            return
+        while not stop_event.is_set():
+            try:
+                task_name, args = task_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                if task_name == "stop":
+                    break
+                if task_name == "ingest":
+                    self._run_flash_pipeline_sync(*args)
+            except Exception as exc:  # pragma: no cover - safety net
+                self._metrics["flash_pipeline_failures"] = (
+                    self._metrics.get("flash_pipeline_failures", 0.0) + 1.0
+                )
+                self._log.error(
+                    "flash_pipeline_failed",
+                    error=str(exc),
+                )
+            finally:
+                task_queue.task_done()
+
+    def _run_flash_pipeline(
+        self,
+        *,
+        processed: ProcessedEvent,
+        stored: MemoryRecord,
+        should_compress: bool,
+        account_key: str | None,
+    ) -> None:
+        if not self._flash_async_enabled:
+            self._run_flash_pipeline_sync(
+                processed,
+                stored,
+                should_compress,
+                account_key,
+            )
+            return
+        if self._flash_queue is None:
+            return
+        try:
+            self._flash_queue.put_nowait(
+                ("ingest", (processed, stored, should_compress, account_key))
+            )
+            self._metrics["flash_pipeline_enqueued"] = (
+                self._metrics.get("flash_pipeline_enqueued", 0.0) + 1.0
+            )
+        except queue.Full:
+            self._metrics["flash_pipeline_dropped"] = (
+                self._metrics.get("flash_pipeline_dropped", 0.0) + 1.0
+            )
+            self._log.warning(
+                "flash_pipeline_queue_full",
+                entity_id=processed.entity_id,
+                event_type=processed.event_type,
+            )
+
+    def _run_flash_pipeline_sync(
+        self,
+        processed: ProcessedEvent,
+        stored: MemoryRecord,
+        should_compress: bool,
+        account_key: str | None,
+    ) -> None:
+        with self._flash_lock:
+            self._run_personalization_lifecycle(account_key=account_key)
+            inferred = self.personalization.observe_memory(
+                stored,
+                account_key=account_key,
+                source_text=processed.description,
+            )
+            self._store_inferred_candidates(inferred, account_key=account_key)
+            if should_compress:
+                self._maybe_compress_cluster(processed, account_key=account_key)
+            self._flash_ops += 1
+            maintenance_interval = max(
+                1,
+                int(self.config.flash_pipeline_maintenance_interval),
+            )
+            if self._flash_ops % maintenance_interval == 0:
+                self._run_flash_maintenance(account_key=account_key)
+            self._metrics["flash_pipeline_runs"] = (
+                self._metrics.get("flash_pipeline_runs", 0.0) + 1.0
+            )
+
+    def _run_flash_maintenance(self, account_key: str | None = None) -> None:
+        # Lightweight maintenance hook: lifecycle scan + ranker refresh trigger.
+        self._run_personalization_lifecycle(account_key=account_key)
+        self._metrics["flash_maintenance_runs"] = (
+            self._metrics.get("flash_maintenance_runs", 0.0) + 1.0
+        )
 
     def _store_core_memory(
         self,

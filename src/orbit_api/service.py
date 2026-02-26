@@ -1564,12 +1564,14 @@ class OrbitApiService:
         style_focused = query_focus == "style"
         mistake_focused = query_focus == "mistake"
         progress_focused = query_focus == "progress"
+        fact_focused = query_focus == "fact"
         recency_focused = self._is_recency_or_progress_query(normalized_query)
         latest_progress = self._latest_progress_candidate(candidates)
         has_advancement_signal = (
             latest_progress is not None
             and self._has_advancement_signal(latest_progress)
         )
+        fact_query_terms = _tokenize_query(normalized_query)
 
         reweighted: list[Any] = []
         for item in ranked:
@@ -1619,6 +1621,20 @@ class OrbitApiService:
                 elif intent.startswith("assistant_"):
                     multiplier *= 0.67
 
+            if fact_focused:
+                if intent == "inferred_user_fact_conflict":
+                    multiplier *= 4.2
+                elif intent == "inferred_user_fact":
+                    multiplier *= 1.9
+                    multiplier *= self._fact_query_alignment_multiplier(
+                        memory=memory,
+                        query_terms=fact_query_terms,
+                    )
+                elif self._intent_bucket(intent) == "profile":
+                    multiplier *= 0.84
+                elif intent.startswith("assistant_"):
+                    multiplier *= 0.6
+
             if (
                 has_advancement_signal
                 and latest_progress is not None
@@ -1667,6 +1683,8 @@ class OrbitApiService:
             return "style"
         if self._is_mistake_pattern_query(normalized_query):
             return "mistake"
+        if self._is_fact_query(normalized_query):
+            return "fact"
         if (
             self._is_architecture_or_progress_query(normalized_query)
             or self._is_recency_or_progress_query(normalized_query)
@@ -2132,6 +2150,47 @@ class OrbitApiService:
             "concise",
         }
         return bool(terms.intersection(style_terms))
+
+    @staticmethod
+    def _is_fact_query(query: str) -> bool:
+        terms = _tokenize_query(query)
+        if not terms:
+            return False
+        fact_terms = {
+            "allergy",
+            "allergic",
+            "avoid",
+            "constraint",
+            "restrictions",
+            "pineapple",
+            "weight",
+            "target",
+            "goal",
+            "goals",
+            "currently",
+            "weigh",
+            "reason",
+            "medical",
+        }
+        return bool(terms.intersection(fact_terms))
+
+    @staticmethod
+    def _fact_query_alignment_multiplier(
+        *,
+        memory: MemoryRecord,
+        query_terms: set[str],
+    ) -> float:
+        relationships = [str(item).strip() for item in memory.relationships]
+        fact_key = OrbitApiService._relationship_value(relationships, "fact_key:") or ""
+        if not fact_key:
+            return 1.0
+        key_terms = set(re.findall(r"[a-z0-9]+", fact_key.lower()))
+        if not key_terms:
+            return 1.0
+        overlap = len(key_terms.intersection(query_terms))
+        if overlap <= 0:
+            return 1.0
+        return min(1.55, 1.0 + (0.15 * float(overlap)))
 
     def _ensure_non_assistant_candidates(
         self,

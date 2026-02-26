@@ -117,6 +117,24 @@ class AdaptivePersonalizationEngine:
         r"(?:is|are)\s+(?:a\s+)?(?:big\s+)?fan\s+of\s+(?P<item>[^.,;!?]+)",
         flags=re.IGNORECASE,
     )
+    _WEIGHT_CURRENT_PATTERN = re.compile(
+        r"\b(?:i(?:'m)?|im|currently|current(?:ly)?\s+at)\s+"
+        r"(?:am\s+|at\s+|weigh(?:ing)?\s+)?"
+        r"(?P<weight>\d{2,3})(?:\s*(?:kg|kgs|kilograms?|lb|lbs|pounds?))?\b",
+        flags=re.IGNORECASE,
+    )
+    _WEIGHT_TARGET_PATTERN = re.compile(
+        r"\b(?:need|aim|target|goal|want|trying|plan)\b[^.!?]{0,40}"
+        r"(?:to be(?:\s+at)?|to reach|reach|get to|hit)\s*"
+        r"(?P<weight>\d{2,3})(?:\s*(?:kg|kgs|kilograms?|lb|lbs|pounds?))?\b",
+        flags=re.IGNORECASE,
+    )
+    _WEIGHT_REASON_PATTERN = re.compile(
+        r"\b(?:need|aim|target|goal|want|trying|plan)\b[^.!?]{0,70}"
+        r"(?:to be(?:\s+at)?|to reach|reach|get to|hit)\s*\d{2,3}[^.!?]{0,80}\bfor\b\s+"
+        r"(?P<reason>[^.!?]+)",
+        flags=re.IGNORECASE,
+    )
     _CONFIRMATION_TERMS = (
         "doctor",
         "confirmed",
@@ -203,6 +221,7 @@ class AdaptivePersonalizationEngine:
         self,
         memory: MemoryRecord,
         account_key: str | None = None,
+        source_text: str | None = None,
     ) -> list[InferredMemoryCandidate]:
         if not self._enabled:
             return []
@@ -252,6 +271,7 @@ class AdaptivePersonalizationEngine:
                     memory=memory,
                     entity_id=entity_id,
                     account_key=account_key,
+                    source_text=source_text,
                 )
             )
         return candidates
@@ -523,8 +543,13 @@ class AdaptivePersonalizationEngine:
         memory: MemoryRecord,
         entity_id: str,
         account_key: str | None = None,
+        source_text: str | None = None,
     ) -> list[InferredMemoryCandidate]:
-        text = f"{memory.summary} {memory.content}".strip()
+        text = (
+            source_text.strip()
+            if isinstance(source_text, str) and source_text.strip()
+            else f"{memory.summary} {memory.content}".strip()
+        )
         signals = self._extract_fact_signals(text=text)
         if not signals:
             return []
@@ -1111,6 +1136,74 @@ class AdaptivePersonalizationEngine:
                     )
                 )
 
+        for match in cls._WEIGHT_CURRENT_PATTERN.finditer(normalized):
+            weight_raw = match.group("weight")
+            try:
+                weight = int(weight_raw)
+            except (TypeError, ValueError):
+                continue
+            if weight < 25 or weight > 400:
+                continue
+            key = f"weight_current:{weight}"
+            signature = ("user", key, "positive")
+            if signature in seen:
+                continue
+            seen.add(signature)
+            extracted.append(
+                _FactSignal(
+                    subject="user",
+                    fact_key=key,
+                    fact_type="goal_profile",
+                    polarity="positive",
+                    value=f"{weight} kg",
+                    critical=False,
+                )
+            )
+
+        for match in cls._WEIGHT_TARGET_PATTERN.finditer(normalized):
+            weight_raw = match.group("weight")
+            try:
+                weight = int(weight_raw)
+            except (TypeError, ValueError):
+                continue
+            if weight < 25 or weight > 400:
+                continue
+            key = f"weight_target:{weight}"
+            signature = ("user", key, "positive")
+            if signature in seen:
+                continue
+            seen.add(signature)
+            extracted.append(
+                _FactSignal(
+                    subject="user",
+                    fact_key=key,
+                    fact_type="goal_profile",
+                    polarity="positive",
+                    value=f"{weight} kg",
+                    critical=False,
+                )
+            )
+
+        for match in cls._WEIGHT_REASON_PATTERN.finditer(normalized):
+            reason = cls._normalize_fact_value(match.group("reason"))
+            if reason is None:
+                continue
+            key = f"weight_goal_reason:{reason}"
+            signature = ("user", key, "positive")
+            if signature in seen:
+                continue
+            seen.add(signature)
+            extracted.append(
+                _FactSignal(
+                    subject="user",
+                    fact_key=key,
+                    fact_type="goal_context",
+                    polarity="positive",
+                    value=reason,
+                    critical=False,
+                )
+            )
+
         return extracted
 
     def _existing_fact_memories(
@@ -1158,6 +1251,12 @@ class AdaptivePersonalizationEngine:
             if signal.polarity == "negative":
                 return f"{subject_label} reports no current allergy to {signal.value}"
             return f"{subject_label} is allergic to {signal.value}"
+        if signal.fact_key.startswith("weight_current:"):
+            return f"{subject_label} currently weighs {signal.value}"
+        if signal.fact_key.startswith("weight_target:"):
+            return f"{subject_label}'s weight target is {signal.value}"
+        if signal.fact_key.startswith("weight_goal_reason:"):
+            return f"{subject_label}'s weight goal reason is {signal.value}"
         return f"{subject_label} likes {signal.value}"
 
     def _fact_content(
@@ -1176,6 +1275,17 @@ class AdaptivePersonalizationEngine:
                 )
             else:
                 base = f"Inferred user fact: {subject_label} is allergic to {signal.value}."
+        elif signal.fact_key.startswith("weight_current:"):
+            base = f"Inferred user fact: {subject_label} currently weighs {signal.value}."
+        elif signal.fact_key.startswith("weight_target:"):
+            base = (
+                f"Inferred user fact: {subject_label}'s target weight is {signal.value}."
+            )
+        elif signal.fact_key.startswith("weight_goal_reason:"):
+            base = (
+                f"Inferred user fact: {subject_label}'s target-weight reason is "
+                f"{signal.value}."
+            )
         else:
             base = f"Inferred user fact: {subject_label} likes {signal.value}."
         if clarification_required:

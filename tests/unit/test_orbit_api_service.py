@@ -726,6 +726,99 @@ def test_service_boosts_inferred_pattern_for_mistake_queries(tmp_path: Path) -> 
         service.close()
 
 
+def test_service_boosts_fact_memories_for_fact_queries(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        assistant = _retrieved(
+            "assistant",
+            intent="assistant_response",
+            content="Long generic response with no user profile facts.",
+            score=0.92,
+        )
+        fact_current = _retrieved(
+            "fact_current",
+            intent="inferred_user_fact",
+            content="Inferred user fact: alice currently weighs 58 kg.",
+            score=0.58,
+            relationships=[
+                "inference_type:fact_extraction_v1",
+                "fact_key:weight_current:58",
+                "fact_subject:user",
+                "fact_status:active",
+                "clarification_required:false",
+            ],
+        )
+        fact_target = _retrieved(
+            "fact_target",
+            intent="inferred_user_fact",
+            content="Inferred user fact: alice's target weight is 64 kg.",
+            score=0.57,
+            relationships=[
+                "inference_type:fact_extraction_v1",
+                "fact_key:weight_target:64",
+                "fact_subject:user",
+                "fact_status:active",
+                "clarification_required:false",
+            ],
+        )
+        reweighted = service._reweight_ranked_by_query(
+            query="What weight am I currently at and what target am I trying to hit?",
+            ranked=[assistant, fact_current, fact_target],
+            candidates=[assistant.memory, fact_current.memory, fact_target.memory],
+        )
+        assert reweighted[0].memory.memory_id in {"fact_current", "fact_target"}
+        assert reweighted[-1].memory.memory_id == "assistant"
+    finally:
+        service.close()
+
+
+def test_service_boosts_conflict_guard_for_fact_queries(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    try:
+        fact = _retrieved(
+            "fact_allergy",
+            intent="inferred_user_fact",
+            content="Inferred user fact: alice is allergic to pineapple.",
+            score=0.79,
+            relationships=[
+                "inference_type:fact_extraction_v1",
+                "fact_key:allergy:pineapple",
+                "fact_subject:user",
+                "fact_status:contested",
+                "clarification_required:true",
+            ],
+        )
+        guard = _retrieved(
+            "guard",
+            intent="inferred_user_fact_conflict",
+            content=(
+                "Inferred conflict guard: conflicting statements detected for alice on pineapple."
+            ),
+            score=0.62,
+            relationships=[
+                "inference_type:fact_conflict_guard_v1",
+                "fact_key:allergy:pineapple",
+                "fact_status:contested",
+                "clarification_required:true",
+            ],
+        )
+        assistant = _retrieved(
+            "assistant",
+            intent="assistant_response",
+            content="Generic food suggestion answer.",
+            score=0.81,
+        )
+        reweighted = service._reweight_ranked_by_query(
+            query="Can Alice eat pineapple or is there an allergy conflict?",
+            ranked=[assistant, fact, guard],
+            candidates=[assistant.memory, fact.memory, guard.memory],
+        )
+        assert reweighted[0].memory.memory_id == "guard"
+        assert reweighted[-1].memory.memory_id == "assistant"
+    finally:
+        service.close()
+
+
 def test_service_prefers_failure_pattern_over_generic_topic_cluster(tmp_path: Path) -> None:
     service = _service(tmp_path)
     try:
