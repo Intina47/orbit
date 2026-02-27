@@ -37,6 +37,28 @@ _SEMANTIC_ALIASES: dict[str, SemanticProviderName] = {
 }
 
 
+class _FallbackEmbeddingProvider(EmbeddingProvider):
+    """Fallback wrapper that degrades to deterministic embeddings on provider errors."""
+
+    def __init__(
+        self,
+        primary: EmbeddingProvider,
+        fallback: EmbeddingProvider,
+    ) -> None:
+        self._primary = primary
+        self._fallback = fallback
+        self._primary_unavailable = False
+
+    def embed(self, text: str):
+        if self._primary_unavailable:
+            return self._fallback.embed(text)
+        try:
+            return self._primary.embed(text)
+        except Exception:
+            self._primary_unavailable = True
+            return self._fallback.embed(text)
+
+
 def build_embedding_provider(
     embedding_dim: int,
     provider_name: str | None = None,
@@ -44,38 +66,52 @@ def build_embedding_provider(
     """Build an embedding provider from explicit name or environment."""
 
     resolved = _resolve_embedding_provider_name(provider_name)
+    deterministic_fallback = DeterministicEmbeddingProvider(embedding_dim=embedding_dim)
+    fallback_enabled = _embedding_fallback_enabled()
     if resolved == "deterministic":
-        return DeterministicEmbeddingProvider(embedding_dim=embedding_dim)
+        return deterministic_fallback
+    primary: EmbeddingProvider
     if resolved == "openai":
         model = os.getenv(
             "MDE_OPENAI_EMBEDDING_MODEL",
             os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
         )
-        return OpenAIEmbeddingProvider(
+        factory = lambda: OpenAIEmbeddingProvider(
             model=model,
             api_key=os.getenv("OPENAI_API_KEY"),
             dimensions=embedding_dim,
         )
-    if resolved == "anthropic":
-        return AnthropicEmbeddingProvider(
+    elif resolved == "anthropic":
+        factory = lambda: AnthropicEmbeddingProvider(
             model=os.getenv("MDE_ANTHROPIC_EMBED_MODEL"),
             api_key=os.getenv("ANTHROPIC_API_KEY"),
             dimensions=embedding_dim,
         )
-    if resolved == "gemini":
-        return GeminiEmbeddingProvider(
+    elif resolved == "gemini":
+        factory = lambda: GeminiEmbeddingProvider(
             model=os.getenv("MDE_GEMINI_EMBEDDING_MODEL"),
             api_key=os.getenv("GEMINI_API_KEY"),
             dimensions=embedding_dim,
         )
-    if resolved == "ollama":
-        return OllamaEmbeddingProvider(
+    elif resolved == "ollama":
+        factory = lambda: OllamaEmbeddingProvider(
             model=os.getenv("MDE_OLLAMA_EMBEDDING_MODEL"),
             host=os.getenv("MDE_OLLAMA_HOST"),
             dimensions=embedding_dim,
         )
-    msg = f"Unsupported embedding provider: {resolved}"
-    raise ValueError(msg)
+    else:
+        msg = f"Unsupported embedding provider: {resolved}"
+        raise ValueError(msg)
+
+    try:
+        primary = factory()
+    except Exception:
+        if fallback_enabled:
+            return deterministic_fallback
+        raise
+    if fallback_enabled:
+        return _FallbackEmbeddingProvider(primary=primary, fallback=deterministic_fallback)
+    return primary
 
 
 def build_semantic_provider(
@@ -145,3 +181,12 @@ def _resolve_semantic_provider_name(
 def _normalize(name: str, aliases: dict[str, str]) -> str:
     key = name.strip().lower()
     return aliases.get(key, key)
+
+
+def _embedding_fallback_enabled() -> bool:
+    return os.getenv("MDE_EMBEDDING_FALLBACK_TO_DETERMINISTIC", "true").lower() in {
+        "true",
+        "1",
+        "yes",
+        "on",
+    }

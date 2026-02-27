@@ -39,6 +39,7 @@ def test_registry_rejects_unknown_provider_names() -> None:
 
 def test_registry_anthropic_embedding_requires_api_key(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("MDE_EMBEDDING_FALLBACK_TO_DETERMINISTIC", "false")
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
         build_embedding_provider(embedding_dim=8, provider_name="anthropic")
 
@@ -53,6 +54,7 @@ def test_registry_openai_provider_paths(monkeypatch) -> None:
 
     monkeypatch.setattr(semantic_encoding, "openai_module", _FakeOpenAIModule())
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("MDE_EMBEDDING_FALLBACK_TO_DETERMINISTIC", "false")
     embedding = build_embedding_provider(embedding_dim=16, provider_name="openai")
     semantic = build_semantic_provider(provider_name="openai")
     assert isinstance(embedding, OpenAIEmbeddingProvider)
@@ -65,6 +67,7 @@ def test_registry_optional_provider_constructors_raise_when_unavailable(
     monkeypatch.setattr(adapters, "anthropic_module", None)
     monkeypatch.setattr(adapters, "google_genai_module", None)
     monkeypatch.setattr(adapters, "ollama_module", None)
+    monkeypatch.setenv("MDE_EMBEDDING_FALLBACK_TO_DETERMINISTIC", "false")
 
     with pytest.raises(RuntimeError):
         build_embedding_provider(embedding_dim=8, provider_name="anthropic")
@@ -78,3 +81,43 @@ def test_registry_optional_provider_constructors_raise_when_unavailable(
         build_semantic_provider(provider_name="gemini")
     with pytest.raises(RuntimeError):
         build_semantic_provider(provider_name="ollama")
+
+
+def test_registry_embedding_falls_back_when_provider_init_fails(
+    monkeypatch,
+) -> None:
+    class _FailingProvider:
+        def __init__(self, *args, **kwargs) -> None:
+            _ = (args, kwargs)
+            msg = "init failed"
+            raise RuntimeError(msg)
+
+    monkeypatch.setenv("MDE_EMBEDDING_FALLBACK_TO_DETERMINISTIC", "true")
+    monkeypatch.setattr(
+        "memory_engine.providers.registry.OllamaEmbeddingProvider",
+        _FailingProvider,
+    )
+    embedding = build_embedding_provider(embedding_dim=8, provider_name="ollama")
+    assert isinstance(embedding, DeterministicEmbeddingProvider)
+
+
+def test_registry_embedding_falls_back_when_provider_embed_fails(
+    monkeypatch,
+) -> None:
+    class _FailingEmbedProvider:
+        def __init__(self, *args, **kwargs) -> None:
+            _ = (args, kwargs)
+
+        def embed(self, text: str):
+            _ = text
+            msg = "embed failed"
+            raise RuntimeError(msg)
+
+    monkeypatch.setenv("MDE_EMBEDDING_FALLBACK_TO_DETERMINISTIC", "true")
+    monkeypatch.setattr(
+        "memory_engine.providers.registry.OpenAIEmbeddingProvider",
+        _FailingEmbedProvider,
+    )
+    provider = build_embedding_provider(embedding_dim=16, provider_name="openai")
+    vector = provider.embed("hello")
+    assert vector.shape[0] == 16
